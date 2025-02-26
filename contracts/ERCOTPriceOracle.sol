@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
-import "@openzeppelin/contracts/access/AccessControl.sol";
+import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import "./interface/IERCOTPriceOracle.sol";
 
 /**
@@ -9,7 +9,7 @@ import "./interface/IERCOTPriceOracle.sol";
  * @dev A smart contract that stores and provides real-time and historical
  *      electricity prices for different ERCOT zones.
  */
-contract ERCOTPriceOracle is IERCOTPriceOracle, AccessControl {
+contract ERCOTPriceOracle is IERCOTPriceOracle, AccessControlUpgradeable {
     // Mapping to store electricity prices per zone and timestamp
     mapping(CommonTypes.ZoneType => mapping(CommonTypes.PhysicalDeliveryType => mapping(uint256 => uint256)))
         private zonePrices;
@@ -19,7 +19,9 @@ contract ERCOTPriceOracle is IERCOTPriceOracle, AccessControl {
     /**
      * @dev Constructor sets the contract deployer as the owner.
      */
-    constructor() {
+    function initialize() public initializer {
+        __AccessControl_init();
+
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(WRITER_ROLE, msg.sender);
     }
