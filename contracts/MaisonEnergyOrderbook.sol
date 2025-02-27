@@ -9,7 +9,6 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@chainlink/contracts/src/v0.8/automation/interfaces/AutomationCompatibleInterface.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "./interface/IMaisonEnergyOrderBook.sol";
-// import "./interface/IERCOTPriceOracle.sol";
 import "./MaisonEnergyToken.sol";
 import "./library/CommonTypes.sol";
 
@@ -512,8 +511,7 @@ contract MaisonEnergyOrderBook is
             // Sort orders in ascending order (lower price first)
             while (
                 i > 1 &&
-                ordersById[orderIds[i - 1]].desiredPrice >
-                order.desiredPrice
+                ordersById[orderIds[i - 1]].desiredPrice > order.desiredPrice
             ) {
                 orderIds[i] = orderIds[i - 1];
                 i--;
@@ -522,8 +520,7 @@ contract MaisonEnergyOrderBook is
             // Sort orders in descending order (higher price first)
             while (
                 i > 1 &&
-                ordersById[orderIds[i - 1]].desiredPrice <
-                order.desiredPrice
+                ordersById[orderIds[i - 1]].desiredPrice < order.desiredPrice
             ) {
                 orderIds[i] = orderIds[i - 1];
                 i--;
@@ -650,7 +647,9 @@ contract MaisonEnergyOrderBook is
         return order.isCanceled || order.isFilled || order.remainQuantity == 0;
     }
 
-    function removeInvalidOrdersFromLast(OrderMetadata memory orderMetadata) internal {
+    function removeInvalidOrdersFromLast(
+        OrderMetadata memory orderMetadata
+    ) internal {
         uint256[] storage orderIds = activeOrderIds[orderMetadata.orderType][
             orderMetadata.zone
         ][orderMetadata.physicalDelivery];
@@ -691,10 +690,6 @@ contract MaisonEnergyOrderBook is
     function performUpkeep(bytes calldata performData) external override {
         uint256 orderId = abi.decode(performData, (uint256));
 
-        _requestNoLiquiditySellOrder(orderId);
-    }
-
-    function _requestNoLiquiditySellOrder(uint256 orderId) internal {
         Order storage order = _getOrderById(orderId);
         order.isFilled = true;
 
