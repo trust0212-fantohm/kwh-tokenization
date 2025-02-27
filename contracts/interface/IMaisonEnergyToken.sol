@@ -27,12 +27,23 @@ interface IMaisonEnergyToken {
         uint256 indexed id,
         uint256 amount
     );
-    event Settled(
-        uint256 indexed id,
-        address indexed tokenHolder,
+    event TokenExpirationRequested(uint256, uint256);
+    event SettlementFailed(
+        uint256 indexed tokenId,
+        address indexed holder,
         uint256 amount
     );
-    event TokenExpirationRequested(uint256, uint256);
+    event Settled(
+        uint256 indexed tokenId,
+        address indexed holder,
+        uint256 amount
+    );
+    event SettledAllDebts(
+        uint256 indexed tokenId
+    );
+    event TokenIssuerMarkedAsDefault(
+        uint256 indexed tokenId
+    );
 
     function mint(
         uint256 amount,

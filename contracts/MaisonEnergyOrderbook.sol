@@ -975,35 +975,36 @@ contract MaisonEnergyOrderBook is
     function getActiveOrdersByType(
         OrderType orderType
     ) public view returns (Order[] memory) {
-        uint256 totalOrders;
+        uint256 totalOrdersNum;
 
         // Count total valid orders first
         for (uint256 i = 0; i < 4; i++) {
-            for (uint256 j = 0; j < 4; j++) {
+            for (uint256 j = 0; j < 3; j++) {
                 // 3+1 to include all PhysicalDeliveryTypes
-                totalOrders += activeOrderIds[orderType][
+                totalOrdersNum += activeOrderIds[orderType][
                     CommonTypes.ZoneType(i)
                 ][CommonTypes.PhysicalDeliveryType(j)].length;
             }
         }
 
         // Allocate memory for the result array
-        Order[] memory ordersList = new Order[](totalOrders);
+        Order[] memory activeOrders = new Order[](totalOrdersNum);
         uint256 index = 0;
 
         // Iterate and collect valid orders
         for (uint256 i = 0; i < 4; i++) {
-            for (uint256 j = 0; j < 4; j++) {
-                uint256[] storage orderIds = activeOrderIds[orderType][
+            for (uint256 j = 0; j < 3; j++) {
+                uint256[] memory orderIds = activeOrderIds[orderType][
                     CommonTypes.ZoneType(i)
                 ][CommonTypes.PhysicalDeliveryType(j)];
+
                 for (uint256 k = 0; k < orderIds.length; k++) {
-                    ordersList[index] = ordersById[orderIds[k]]; // Fetch order from storage
+                    activeOrders[index] = ordersById[orderIds[k]];
                     index++;
                 }
             }
         }
 
-        return ordersList;
+        return activeOrders;
     }
 }
