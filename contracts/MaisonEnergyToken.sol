@@ -108,9 +108,10 @@ contract MaisonEnergyToken is
         string memory ercotSupplyId,
         EnergyAttributes memory energyAttributes
     ) external onlyRole(ISSUER_ROLE) {
+        require(!hasDebt(msg.sender), "You are in default.");
         require(
-            hasDebt(msg.sender),
-            "Issuer is in default, settle debts first"
+            !hasPendingPromiseToPay(msg.sender),
+            "You have pending promise-to-pay."
         );
         require(
             validFrom > block.timestamp && validTo > validFrom,
@@ -158,6 +159,7 @@ contract MaisonEnergyToken is
     }
 
     modifier onlyIssuer(uint256 id) {
+        require(id < NumKindsOfToken, "Invalid token id");
         TokenDetail memory token = tokenDetails[id];
         require(
             msg.sender == token.issuer,
@@ -170,12 +172,14 @@ contract MaisonEnergyToken is
     function destroy(uint256 amount, uint256 id) external onlyIssuer(id) {
         TokenDetail storage token = tokenDetails[id];
 
-        require(!hasDebt(msg.sender), "You are in default");
+        require(
+            !isIssuerDefaultedForToken[token.issuer][id],
+            "You are in default for this token."
+        );
         require(
             hasIssuerPendingPromiseToPay[msg.sender][id],
             "You have outstanding settlements."
         );
-
         require(
             balanceOf(msg.sender, id) >= amount,
             "You don't have enough token to destroy"
@@ -241,69 +245,28 @@ contract MaisonEnergyToken is
     }
 
     // Backend action: This function should be called instantly after token expiration
-    function settleForExpiration(
-        uint256 id,
-        address[] memory tokenHolders,
-        uint256[] memory amounts
-    ) external onlyRole(BACKEND_ROLE) {
-        require(tokenHolders.length == amounts.length, "Invalid input");
-
-        TokenDetail memory token = tokenDetails[id];
-        require(token.isExpired, "Token not expired yet");
-
-        (uint256 realtimePrice, ) = priceOracle.getRealTimePrice(
-            token.energyAttributes.zone,
-            token.energyAttributes.physicalDelivery
-        );
-
-        uint256 settlementPrice = realtimePrice < token.embeddedValue
-            ? realtimePrice
-            : token.embeddedValue;
-
-        bool allSettled = true;
-
-        for (uint256 i = 0; i < tokenHolders.length; i++) {
-            uint256 settlementAmount = settlementPrice * amounts[i];
-            bool success = usdc.transferFrom(
-                token.issuer,
-                tokenHolders[i],
-                settlementAmount
-            );
-
-            if (!success) {
-                emit SettlementFailed(id, tokenHolders[i], settlementAmount);
-                allSettled = false;
-            } else {
-                emit Settled(id, tokenHolders[i], settlementAmount);
-            }
-        }
-
-        if (allSettled) {
-            hasIssuerPendingPromiseToPay[token.issuer][id] = false;
-            emit SettledAllDebts(id);
-        } else {
-            hasIssuerPendingPromiseToPay[token.issuer][id] = true;
-        }
-    }
-
-    // Backend should call 3 times intervally after settling expiration failed
-    function retryFailedSettlements(
+    function settleDebtsForExpiration(
         uint256 id,
         address[] memory tokenHolders,
         uint256[] memory amountOwed
     ) external onlyRole(BACKEND_ROLE) {
+        require(tokenHolders.length == amountOwed.length, "Invalid input");
         require(tokenDetails[id].isExpired, "Token not expired yet");
-        require(tokenHolders.length == amountOwed.length, "Invalid");
-        require(retryAttempts[id] < 2, "Max retry attempts reached");
+        require(retryAttempts[id] < 3, "Can't not be called over 3 times");
+        require(
+            !hasIssuerPendingPromiseToPay[tokenDetails[id].issuer][id] &&
+                !isIssuerDefaultedForToken[tokenDetails[id].issuer][id],
+            "All debts are settled"
+        );
 
-        // TokenDetails memory token = tokenDetails[id];
+        TokenDetail storage token = tokenDetails[id];
         bool allSettled = true;
-        retryAttempts[id]++;
 
+        // Attempt settlement
         for (uint256 i = 0; i < tokenHolders.length; i++) {
-            if (amountOwed[i] > 0 && retryAttempts[id] < 2) {
+            if (amountOwed[i] > 0) {
                 bool success = usdc.transferFrom(
-                    tokenDetails[id].issuer,
+                    token.issuer,
                     tokenHolders[i],
                     amountOwed[i]
                 );
@@ -317,18 +280,19 @@ contract MaisonEnergyToken is
             }
         }
 
-        // If all debts were successfully settled, emit an event
+        // If everything settled, clear debts and reset flags
         if (allSettled) {
-            hasIssuerPendingPromiseToPay[tokenDetails[id].issuer][id] = false;
+            isIssuerDefaultedForToken[token.issuer][id] = false;
+            hasIssuerPendingPromiseToPay[token.issuer][id] = false;
             emit SettledAllDebts(id);
         } else {
-            // If this was the second retry and still unpaid holders exist, mark token as defaulted
-            if (retryAttempts[id] >= 2) {
-                isIssuerDefaultedForToken[tokenDetails[id].issuer][id] = true;
-
+            // If retry attempts exceed limit, mark issuer as defaulted
+            retryAttempts[id]++;
+            if (retryAttempts[id] >= 3) {
+                isIssuerDefaultedForToken[token.issuer][id] = true;
                 emit TokenIssuerMarkedAsDefault(id);
             }
-            hasIssuerPendingPromiseToPay[tokenDetails[id].issuer][id] = true;
+            hasIssuerPendingPromiseToPay[token.issuer][id] = true;
         }
     }
 
@@ -366,7 +330,6 @@ contract MaisonEnergyToken is
             emit SettledAllDebts(id);
         } else {
             hasIssuerPendingPromiseToPay[tokenDetails[id].issuer][id] = true;
-            // emit TokenMarkedAsDefault(id, tokenDetails[id].issuer);
         }
     }
 
@@ -456,6 +419,19 @@ contract MaisonEnergyToken is
             }
         }
         return false; // No debts found
+    }
+
+    function hasPendingPromiseToPay(address issuer) public view returns (bool) {
+        uint256[] memory issuerTokens = tokenIdsForIssuer[issuer];
+
+        for (uint256 i = 0; i < issuerTokens.length; i++) {
+            uint256 tokenId = issuerTokens[i];
+
+            if (hasIssuerPendingPromiseToPay[issuer][tokenId]) {
+                return true;
+            }
+        }
+        return false;
     }
 
     function supportsInterface(

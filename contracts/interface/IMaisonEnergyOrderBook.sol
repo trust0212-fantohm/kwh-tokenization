@@ -55,7 +55,6 @@ interface IMaisonEnergyOrderBook {
     );
     event OrderCanceled(
         uint256 indexed orderId,
-        address indexed trader,
         uint256 cancleTime
     );
     event NoLiquiditySellOrderCreated(
@@ -64,8 +63,7 @@ interface IMaisonEnergyOrderBook {
         uint256 orderCreatedTime
     );
     event TreasuryUpdated(address indexed newTreasury);
-    event BuyFeeUpdated(uint256 newBuyFee);
-    event SellFeeUpdated(uint256 newSellFee);
+    event FeeUpdated(uint256 buyFeeBips, uint256 sellFeeBips);
 
     function createBuyMarketOrder(
         uint256 usdcValue,
@@ -105,8 +103,7 @@ interface IMaisonEnergyOrderBook {
         address user,
         bool status
     ) external view returns (Order[] memory);
-    function setbuyFeeBips(uint256 _buyFeeBips) external;
-    function setsellFeeBips(uint256 _sellFeeBips) external;
+    function setFeeBips(uint256 _buyFeeBips, uint256 _sellFeeBips) external;
     function setTreasury(address _treasury) external;
     // function setPriceOracle(address _newPriceOracleAddress) external;
 }

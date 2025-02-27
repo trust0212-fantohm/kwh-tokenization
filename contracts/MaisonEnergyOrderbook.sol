@@ -2,7 +2,7 @@
 
 pragma solidity ^0.8.4;
 
-import "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
@@ -20,7 +20,7 @@ contract MaisonEnergyOrderBook is
     ReentrancyGuardUpgradeable,
     AutomationCompatibleInterface
 {
-    using SafeERC20 for ERC20Upgradeable;
+    using SafeERC20 for IERC20;
 
     uint256 public nonce;
     uint256 private constant BASE_BIPS = 10000;
@@ -31,15 +31,13 @@ contract MaisonEnergyOrderBook is
     address public treasury;
     address public insuranceAddress;
 
-    mapping(address => uint256) public OrderCountByUser;
     mapping(OrderType => mapping(CommonTypes.ZoneType => mapping(CommonTypes.PhysicalDeliveryType => uint256[])))
         public activeOrderIds;
     mapping(uint256 => Order) private ordersById;
     mapping(address => uint256[]) private ordersByUser; // Tracks order IDs by user
 
     // IERCOTPriceOracle public priceOracle;
-    ERC20Upgradeable public usdc;
-
+    IERC20 public usdc;
     MaisonEnergyToken public maisonEnergyToken;
 
     function initialize(
@@ -68,26 +66,8 @@ contract MaisonEnergyOrderBook is
         nonce = 0;
 
         // priceOracle = IERCOTPriceOracle(_priceOracle);
-        usdc = ERC20Upgradeable(_usdcAddress);
+        usdc = IERC20(_usdcAddress);
         maisonEnergyToken = MaisonEnergyToken(_maisonEnergyTokenAddress);
-    }
-
-    function getActiveOrders(
-        OrderType orderType,
-        CommonTypes.ZoneType zone,
-        CommonTypes.PhysicalDeliveryType physicalDelivery
-    ) public view returns (Order[] memory) {
-        uint256[] memory orderIds = activeOrderIds[orderType][zone][
-            physicalDelivery
-        ];
-        uint256 totalOrders = orderIds.length;
-
-        Order[] memory orders = new Order[](totalOrders);
-        for (uint256 i = 0; i < totalOrders; i++) {
-            orders[i] = ordersById[orderIds[i]];
-        }
-
-        return orders;
     }
 
     /**
@@ -218,7 +198,7 @@ contract MaisonEnergyOrderBook is
             usdc.safeTransfer(msg.sender, marketOrder.remainUsdcValue);
 
         fullfilledOrderIds.push(marketOrder.id);
-        cleanLimitOrders(marketOrder.orderMetadata);
+        removeInvalidOrdersFromLast(marketOrder.orderMetadata);
 
         (data.realAmount, data.feeAmount) = getAmountDeductFee(
             data.tokenAmount,
@@ -241,7 +221,6 @@ contract MaisonEnergyOrderBook is
             );
 
         marketOrder.lastTradeTimestamp = block.timestamp;
-        OrderCountByUser[msg.sender]++;
     }
 
     /**
@@ -432,7 +411,7 @@ contract MaisonEnergyOrderBook is
         }
 
         fullfilledOrderIds.push(marketOrder.id);
-        cleanLimitOrders(marketOrder.orderMetadata);
+        removeInvalidOrdersFromLast(marketOrder.orderMetadata);
 
         // Transfer USDC to seller
         (data.realAmount, data.feeAmount) = getAmountDeductFee(
@@ -445,7 +424,7 @@ contract MaisonEnergyOrderBook is
             usdc.safeTransfer(treasury, data.feeAmount);
         }
 
-        OrderCountByUser[msg.sender]++;
+        marketOrder.lastTradeTimestamp = block.timestamp;
     }
 
     /**
@@ -507,8 +486,6 @@ contract MaisonEnergyOrderBook is
 
         executeLimitOrders(tokenId, orderMetadata);
 
-        OrderCountByUser[msg.sender]++;
-
         emit LimitOrderCreated(
             msg.sender,
             usdcAmount,
@@ -519,62 +496,42 @@ contract MaisonEnergyOrderBook is
         );
     }
 
-    function removeInvalidOrdersFromLast(
-        OrderMetadata memory orderMetadata
-    ) internal {
-        // Get the original storage reference
-        uint256[] storage orderIds = activeOrderIds[orderMetadata.orderType][
-            orderMetadata.zone
-        ][orderMetadata.physicalDelivery];
-
-        while (orderIds.length > 0) {
-            uint256 lastOrderId = orderIds[orderIds.length - 1];
-            if (!isInvalidOrder(lastOrderId)) {
-                break; // Stop if last order is valid
-            }
-
-            // Remove the last invalid order
-            orderIds.pop();
-            fullfilledOrderIds.push(lastOrderId);
-        }
-    }
-
     function insertLimitOrder(uint256 orderId) internal {
-        Order storage newOrder = ordersById[orderId]; // Fetch order from storage
+        Order storage order = ordersById[orderId]; // Fetch order from storage
 
-        uint256[] storage orderList = activeOrderIds[
-            newOrder.orderMetadata.orderType
-        ][newOrder.orderMetadata.zone][newOrder.orderMetadata.physicalDelivery];
+        uint256[] storage orderIds = activeOrderIds[
+            order.orderMetadata.orderType
+        ][order.orderMetadata.zone][order.orderMetadata.physicalDelivery];
 
         // Insert orderId at the end
-        orderList.push(orderId);
+        orderIds.push(orderId);
 
-        uint256 i = orderList.length;
+        uint256 i = orderIds.length;
 
-        if (newOrder.orderMetadata.orderType == OrderType.BUY) {
+        if (order.orderMetadata.orderType == OrderType.BUY) {
             // Sort orders in ascending order (lower price first)
             while (
                 i > 1 &&
-                ordersById[orderList[i - 1]].desiredPrice >
-                newOrder.desiredPrice
+                ordersById[orderIds[i - 1]].desiredPrice >
+                order.desiredPrice
             ) {
-                orderList[i] = orderList[i - 1];
+                orderIds[i] = orderIds[i - 1];
                 i--;
             }
         } else {
             // Sort orders in descending order (higher price first)
             while (
                 i > 1 &&
-                ordersById[orderList[i - 1]].desiredPrice <
-                newOrder.desiredPrice
+                ordersById[orderIds[i - 1]].desiredPrice <
+                order.desiredPrice
             ) {
-                orderList[i] = orderList[i - 1];
+                orderIds[i] = orderIds[i - 1];
                 i--;
             }
         }
 
         // Place the new order in the correct position
-        orderList[i] = orderId;
+        orderIds[i] = orderId;
     }
 
     // We execute matched buy and sell orders one by one
@@ -584,7 +541,7 @@ contract MaisonEnergyOrderBook is
         OrderMetadata memory orderMetadata
     ) internal nonReentrant {
         // Clean invalid orders first
-        cleanLimitOrders(orderMetadata);
+        removeInvalidOrdersFromLast(orderMetadata);
 
         // Fetch active buy and sell orders using order IDs
         uint256[] storage buyOrderIds = activeOrderIds[OrderType.BUY][
@@ -620,7 +577,9 @@ contract MaisonEnergyOrderBook is
                 sellerDesiredUsdcAmount,
                 OrderType.SELL
             );
+
             usdc.safeTransfer(lastSellOrder.trader, realAmount);
+
             if (feeAmount > 0) {
                 usdc.safeTransfer(treasury, feeAmount);
             }
@@ -691,7 +650,7 @@ contract MaisonEnergyOrderBook is
         return order.isCanceled || order.isFilled || order.remainQuantity == 0;
     }
 
-    function cleanLimitOrders(OrderMetadata memory orderMetadata) internal {
+    function removeInvalidOrdersFromLast(OrderMetadata memory orderMetadata) internal {
         uint256[] storage orderIds = activeOrderIds[orderMetadata.orderType][
             orderMetadata.zone
         ][orderMetadata.physicalDelivery];
@@ -703,8 +662,9 @@ contract MaisonEnergyOrderBook is
                 break; // Stop if the last order is valid
             }
 
-            // Remove the invalid order
-            removeInvalidOrdersFromLast(orderMetadata);
+            // Remove the last invalid order
+            orderIds.pop();
+            fullfilledOrderIds.push(lastOrderId);
         }
     }
 
@@ -869,16 +829,16 @@ contract MaisonEnergyOrderBook is
         return order;
     }
 
-    function getOrderById(uint256 orderId) public view returns (Order memory) {
-        require(orderId < nonce, "Invalid order id");
-
+    function getOrderById(
+        uint256 orderId
+    ) external view returns (Order memory) {
         return _getOrderById(orderId);
     }
 
     function getOrdersByUser(
         address user,
         bool status
-    ) external view returns (Order[] memory) {
+    ) public view returns (Order[] memory) {
         uint256 totalOrders = ordersByUser[user].length;
         require(totalOrders > 0, "User did not make any order");
 
@@ -886,7 +846,7 @@ contract MaisonEnergyOrderBook is
         uint256 count = 0;
 
         for (uint256 i = 0; i < totalOrders; i++) {
-            Order storage order = ordersById[ordersByUser[user][i]];
+            Order memory order = ordersById[ordersByUser[user][i]];
             if (
                 (status && !order.isFilled && !order.isCanceled) ||
                 (!status && (order.isFilled || order.isCanceled))
@@ -904,12 +864,19 @@ contract MaisonEnergyOrderBook is
         return userOrders;
     }
 
-    function cancelOrder(uint256 orderId) external {
-        require(orderId < nonce, "Invalid Id");
+    modifier onlyOrderMaker(uint256 orderId) {
+        require(orderId < nonce, "Invalid order id");
+        Order memory order = _getOrderById(orderId);
+        require(
+            order.trader == msg.sender,
+            "You are not an maker of this order"
+        );
+        _;
+    }
 
+    function cancelOrder(uint256 orderId) external onlyOrderMaker(orderId) {
         Order storage order = _getOrderById(orderId);
 
-        require(order.trader == msg.sender, "You are not an owner");
         require(
             order.quantity > 0 && order.usdcAmount > 0,
             "Not a limit order"
@@ -920,34 +887,30 @@ contract MaisonEnergyOrderBook is
         order.isCanceled = true;
 
         if (order.orderMetadata.orderType == OrderType.BUY) {
-            usdc.safeTransfer(order.trader, order.remainUsdcValue);
+            usdc.safeTransfer(msg.sender, order.remainUsdcValue);
         } else {
             maisonEnergyToken.safeTransferFrom(
                 address(this),
-                order.trader,
+                msg.sender,
                 order.tokenId,
                 order.remainQuantity,
                 ""
             );
         }
 
-        emit OrderCanceled(order.id, order.trader, block.timestamp);
+        emit OrderCanceled(order.id, block.timestamp);
     }
 
-    function setbuyFeeBips(uint256 _buyFeeBips) external {
-        require(buyFeeBips != _buyFeeBips, "Same buyFeeBips");
-        require(_buyFeeBips < BASE_BIPS, "Invalid buyFeeBips");
+    function setFeeBips(
+        uint256 _buyFeeBips,
+        uint256 _sellFeeBips
+    ) external onlyOwner {
+        require(_buyFeeBips > 0 && _sellFeeBips > 0, "Invalid Fee");
+
         buyFeeBips = _buyFeeBips;
-
-        emit BuyFeeUpdated(buyFeeBips);
-    }
-
-    function setsellFeeBips(uint256 _sellFeeBips) external {
-        require(sellFeeBips != _sellFeeBips, "Invalid sellFeeBips");
-        require(_sellFeeBips < BASE_BIPS, "Invalid sellFeeBips");
         sellFeeBips = _sellFeeBips;
 
-        emit SellFeeUpdated(sellFeeBips);
+        emit FeeUpdated(buyFeeBips, sellFeeBips);
     }
 
     function setTreasury(address _treasury) external onlyOwner {
@@ -956,11 +919,6 @@ contract MaisonEnergyOrderBook is
 
         emit TreasuryUpdated(treasury);
     }
-
-    // function setPriceOracle(address _newPriceOracleAddress) external onlyOwner {
-    //     require(_newPriceOracleAddress != address(0), "Invalid address");
-    //     priceOracle = IERCOTPriceOracle(_newPriceOracleAddress);
-    // }
 
     function getAmountDeductFee(
         uint256 amount,
@@ -994,17 +952,37 @@ contract MaisonEnergyOrderBook is
         // Iterate and collect valid orders
         for (uint256 i = 0; i < 4; i++) {
             for (uint256 j = 0; j < 3; j++) {
-                uint256[] memory orderIds = activeOrderIds[orderType][
-                    CommonTypes.ZoneType(i)
-                ][CommonTypes.PhysicalDeliveryType(j)];
+                Order[] memory orders = getActiveOrders(
+                    orderType,
+                    CommonTypes.ZoneType(i),
+                    CommonTypes.PhysicalDeliveryType(j)
+                );
 
-                for (uint256 k = 0; k < orderIds.length; k++) {
-                    activeOrders[index] = ordersById[orderIds[k]];
-                    index++;
+                // Copy results into the activeOrders array
+                for (uint256 k = 0; k < orders.length; k++) {
+                    activeOrders[index++] = orders[k];
                 }
             }
         }
 
         return activeOrders;
+    }
+
+    function getActiveOrders(
+        OrderType orderType,
+        CommonTypes.ZoneType zone,
+        CommonTypes.PhysicalDeliveryType physicalDelivery
+    ) public view returns (Order[] memory) {
+        uint256[] memory orderIds = activeOrderIds[orderType][zone][
+            physicalDelivery
+        ];
+        uint256 totalOrders = orderIds.length;
+
+        Order[] memory orders = new Order[](totalOrders);
+        for (uint256 i = 0; i < totalOrders; i++) {
+            orders[i] = ordersById[orderIds[i]];
+        }
+
+        return orders;
     }
 }
