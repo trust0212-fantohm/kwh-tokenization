@@ -244,7 +244,7 @@ contract MaisonEnergyToken is
         emit TokenExpirationRequested(id, block.timestamp);
     }
 
-    // Backend action: This function should be called instantly after token expiration
+    // Backend action: This function should be called by backend 24 hrs later once it subscribes token expiration event and tries 3 times
     function settleDebtsForExpiration(
         uint256 id,
         address[] memory tokenHolders,
@@ -296,12 +296,12 @@ contract MaisonEnergyToken is
         }
     }
 
-    // Expiration - manually by Issuer
+    // Manual - manually by Issuer
     function manualSettle(
         uint256 id,
         address[] memory tokenHolders,
         uint256[] memory amountOwed
-    ) external onlyRole(ISSUER_ROLE) {
+    ) external onlyIssuer(id) {
         require(tokenDetails[id].isExpired, "Token not expired yet");
         require(tokenHolders.length == amountOwed.length, "Invalid input");
 
