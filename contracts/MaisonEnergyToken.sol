@@ -123,7 +123,7 @@ contract MaisonEnergyToken is
             energyAttributes.physicalDelivery
         );
 
-        uint256 usdcValue = amount * realtimePrice;
+        uint256 usdcValue = (amount * realtimePrice) / 10 ** 18;
 
         if (tokenIdsForIssuer[msg.sender].length == 0) {
             issuerMetrics[msg.sender].collateralBips = 100;
@@ -177,7 +177,7 @@ contract MaisonEnergyToken is
             "You are in default for this token."
         );
         require(
-            hasIssuerPendingPromiseToPay[msg.sender][id],
+            !hasIssuerPendingPromiseToPay[msg.sender][id],
             "You have outstanding settlements."
         );
         require(
