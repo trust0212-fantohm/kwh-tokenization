@@ -75,6 +75,34 @@ contract MaisonEnergyToken is
     IERCOTPriceOracle public priceOracle;
     IERC20 public usdc;
 
+    struct IssuerMetrics {
+        uint256 score;
+        IssuerStatus status;
+        uint256 totalKwhMinted;
+        uint256 totalVolumeSoldKwh;
+        uint256 totalVolumeSoldDollar;
+        uint256 totalActiveTokens;
+        uint256 totalExpiredTokens;
+        uint256 tokensExpiringIn1;
+        uint256 tokensExpiringIn2;
+        uint256 tokensExpiringIn3;
+        uint256 tokensExpiringIn4;
+        uint256 tokensExpiringIn5;
+        uint256 tokensExpiringIn6;
+        uint256 tokensExpiringIn12;
+        uint256 tokensExpiringIn24;
+        uint256 tokensExpiringIn36;
+        uint256 settledForPhysicalDelivery;
+        uint256 settledOnExpirationVolumeKwh;
+        uint256 settledOnExpirationVolumeDollar;
+        uint256 tokensDestroyed;
+        uint256 pendingPromiseToPay;
+        uint256 pendingPromiseToPayDefault;
+        uint256 pendingPromiseToPayDefaultHonored;
+        uint256 minTimeToHonorDefaults;
+        uint256 maxTimeToHonorDefaults;
+    }
+
     /**
      * @notice Initializes the contract with required addresses and sets up initial roles
      * @param _priceOracleAddress Address of the ERCOT price oracle contract
@@ -407,7 +435,17 @@ contract MaisonEnergyToken is
     /**
      * @notice Returns metrics for a representative address
      * @param repAddress Address of the representative
-     * @return Various metrics including total redeemed, allocated, and expiring tokens
+     * @return totalRedeemed Total number of tokens redeemed by the representative
+     * @return totalAllocated Total number of tokens currently allocated to the representative
+     * @return tokensExpiringIn1 Number of tokens expiring in 1 month
+     * @return tokensExpiringIn2 Number of tokens expiring in 2 months
+     * @return tokensExpiringIn3 Number of tokens expiring in 3 months
+     * @return tokensExpiringIn4 Number of tokens expiring in 4 months
+     * @return tokensExpiringIn5 Number of tokens expiring in 5 months
+     * @return tokensExpiringIn6 Number of tokens expiring in 6 months
+     * @return tokensExpiringIn12 Number of tokens expiring in 12 months
+     * @return tokensExpiringIn24 Number of tokens expiring in 24 months
+     * @return tokensExpiringIn36 Number of tokens expiring in 36 months
      */
     function getRepMetrics(
         address repAddress
@@ -509,5 +547,129 @@ contract MaisonEnergyToken is
         returns (bool)
     {
         return super.supportsInterface(interfaceId);
+    }
+
+    /**
+     * @notice Returns comprehensive metrics for an issuer
+     * @param issuerAddress Address of the issuer to get metrics for
+     * @return IssuerMetrics struct containing all issuer statistics
+     */
+    function getIssuerMetrics(address issuerAddress) public view returns (IssuerMetrics memory) {
+        IssuerMetrics memory metrics;
+        uint256[] memory issuerTokens = tokenIdsForIssuer[issuerAddress];
+        
+        // Initialize metrics
+        metrics.status = hasDebt(issuerAddress) ? IssuerStatus.Frozen : 
+                        hasPendingPromiseToPay(issuerAddress) ? IssuerStatus.Inactive : 
+                        IssuerStatus.Active;
+        
+        metrics.pendingPromiseToPay = issuerMetrics[issuerAddress].pendingPromiseToPayAmounts;
+        metrics.pendingPromiseToPayDefault = issuerMetrics[issuerAddress].pendingPromiseToPayDefault;
+        metrics.pendingPromiseToPayDefaultHonored = issuerMetrics[issuerAddress].pendingPromiseToPayDefaultHonored;
+        
+        // Calculate metrics for each token
+        for (uint256 i = 0; i < issuerTokens.length; i++) {
+            uint256 id = issuerTokens[i];
+            TokenDetail memory token = tokenDetails[id];
+            
+            // Total minted and volume metrics
+            metrics.totalKwhMinted += token.totalMintedToken;
+            metrics.totalVolumeSoldKwh += (token.totalMintedToken - balanceOf(issuerAddress, id) - token.totalDestroyed);
+            metrics.tokensDestroyed += token.totalDestroyed;
+            
+            // Get realtime price for dollar calculations
+            (uint256 realtimePrice, ) = priceOracle.getRealTimePrice(
+                token.energyAttributes.zone,
+                token.energyAttributes.physicalDelivery
+            );
+            
+            uint256 soldVolume = token.totalMintedToken - balanceOf(issuerAddress, id) - token.totalDestroyed;
+            metrics.totalVolumeSoldDollar += (soldVolume * realtimePrice) / 10 ** 18;
+            
+            // Active and expired tokens
+            if (token.isExpired) {
+                metrics.totalExpiredTokens += balanceOf(issuerAddress, id);
+                metrics.settledOnExpirationVolumeKwh += token.totalRedeemed;
+                metrics.settledOnExpirationVolumeDollar += (token.totalRedeemed * realtimePrice) / 10 ** 18;
+            } else {
+                metrics.totalActiveTokens += balanceOf(issuerAddress, id);
+                
+                // Calculate tokens expiring in different time periods
+                uint256 timeToExpiry = token.validTo - block.timestamp;
+                if (timeToExpiry <= 30 days) {
+                    metrics.tokensExpiringIn1 += balanceOf(issuerAddress, id);
+                } else if (timeToExpiry <= 60 days) {
+                    metrics.tokensExpiringIn2 += balanceOf(issuerAddress, id);
+                } else if (timeToExpiry <= 90 days) {
+                    metrics.tokensExpiringIn3 += balanceOf(issuerAddress, id);
+                } else if (timeToExpiry <= 120 days) {
+                    metrics.tokensExpiringIn4 += balanceOf(issuerAddress, id);
+                } else if (timeToExpiry <= 150 days) {
+                    metrics.tokensExpiringIn5 += balanceOf(issuerAddress, id);
+                } else if (timeToExpiry <= 180 days) {
+                    metrics.tokensExpiringIn6 += balanceOf(issuerAddress, id);
+                } else if (timeToExpiry <= 365 days) {
+                    metrics.tokensExpiringIn12 += balanceOf(issuerAddress, id);
+                } else if (timeToExpiry <= 730 days) {
+                    metrics.tokensExpiringIn24 += balanceOf(issuerAddress, id);
+                } else if (timeToExpiry <= 1095 days) {
+                    metrics.tokensExpiringIn36 += balanceOf(issuerAddress, id);
+                }
+            }
+            
+            // Physical delivery settlement - count all physical delivery types
+            if (token.energyAttributes.physicalDelivery == CommonTypes.PhysicalDeliveryType.On_Peak ||
+                token.energyAttributes.physicalDelivery == CommonTypes.PhysicalDeliveryType.Off_Peak ||
+                token.energyAttributes.physicalDelivery == CommonTypes.PhysicalDeliveryType.All) {
+                metrics.settledForPhysicalDelivery += token.totalRedeemed;
+            }
+        }
+        
+        // Calculate score based on various factors
+        metrics.score = calculateIssuerScore(metrics);
+        
+        return metrics;
+    }
+    
+    /**
+     * @notice Calculates issuer score based on various metrics
+     * @param metrics IssuerMetrics struct containing issuer statistics
+     * @return uint256 Calculated score
+     */
+    function calculateIssuerScore(IssuerMetrics memory metrics) internal pure returns (uint256) {
+        // Base score starts at 1000
+        uint256 score = 1000;
+        
+        // Deduct points for defaults and pending payments
+        if (metrics.pendingPromiseToPayDefault > 0) {
+            score -= 200;
+        }
+        if (metrics.pendingPromiseToPay > 0) {
+            score -= 100;
+        }
+        
+        // Add points for honored defaults
+        if (metrics.pendingPromiseToPayDefaultHonored > 0) {
+            score += 50;
+        }
+        
+        // Adjust score based on volume
+        if (metrics.totalVolumeSoldKwh > 1000000) { // 1M kWh
+            score += 100;
+        } else if (metrics.totalVolumeSoldKwh > 100000) { // 100k kWh
+            score += 50;
+        }
+        
+        // Deduct points for high ratio of expired tokens
+        if (metrics.totalExpiredTokens > 0) {
+            uint256 expiredRatio = (metrics.totalExpiredTokens * 100) / metrics.totalKwhMinted;
+            if (expiredRatio > 50) {
+                score -= 200;
+            } else if (expiredRatio > 20) {
+                score -= 100;
+            }
+        }
+        
+        return score;
     }
 }

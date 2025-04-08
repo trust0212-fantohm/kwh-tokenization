@@ -20,20 +20,17 @@ interface IMaisonEnergyOrderBook {
         uint256 tokenId;
         OrderMetadata orderMetadata;
         uint256 desiredPrice; // Only For LimitOrder
-        uint256 quantity; // For sell
-        uint256 remainQuantity;
+        uint256 tokenAmount; // For sell
+        uint256 remainTokenAmount; // For sell
         uint256 usdcAmount; // For buy
-        uint256 remainUsdcValue;
-        bool isCanceled;
+        uint256 remainUsdcAmount;
         bool isFilled;
+        bool isMarketOrder;
+        bool isCanceled;
         uint256 validTo; // Only For LimitOrder
         uint256 lastTradeTimestamp;
+        uint256 createdAt;
     }
-    // struct RecentOrder {
-    //     uint256 totalValue;
-    //     uint256 desiredPrice;
-    //     uint256 remainQuantity;
-    // }
 
     event TradeExecuted(
         uint256 indexed tokenId,
@@ -76,7 +73,6 @@ interface IMaisonEnergyOrderBook {
         OrderMetadata memory orderMetadata
     ) external;
     function createLimitOrder(
-        uint256 usdcAmount,
         uint256 desiredPrice,
         uint256 quantity,
         uint256 validTo,
@@ -84,26 +80,8 @@ interface IMaisonEnergyOrderBook {
         OrderMetadata memory orderMetadata
     ) external;
     function cancelOrder(uint256 id) external;
-    // function getLatestRate(
-    //     CommonTypes.ZoneType zone,
-    //     CommonTypes.PhysicalDeliveryType physicalDelivery
-    // )
-    //     external
-    //     view
-    //     returns (
-    //         RecentOrder memory bestBidOrder,
-    //         RecentOrder memory bestAskOrder
-    //     );
-    // function orderBook(
-    //     uint256 depth,
-    //     OrderType orderType
-    // ) external view returns (uint256, Order[] memory);
+
     function getOrderById(uint256 id) external view returns (Order memory);
-    function getOrdersByUser(
-        address user,
-        bool status
-    ) external view returns (Order[] memory);
     function setFeeBips(uint256 _buyFeeBips, uint256 _sellFeeBips) external;
     function setTreasury(address _treasury) external;
-    // function setPriceOracle(address _newPriceOracleAddress) external;
 }
