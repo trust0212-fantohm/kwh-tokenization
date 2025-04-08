@@ -60,10 +60,6 @@ describe("MaisonEnergyToken", function () {
     ) as MaisonEnergyToken;
     await maisonEnergyToken.waitForDeployment();
 
-    console.log("MaisonEnergyToken deployed to:", await maisonEnergyToken.getAddress());
-    console.log("MockUSDC deployed to:", await mockUSDC.getAddress());
-    console.log("ERCOTPriceOracle deployed to:", await ercotPriceOracle.getAddress());
-
     // Grant ISSUER_ROLE to issuer
     await maisonEnergyToken.grantRole(
       await maisonEnergyToken.ISSUER_ROLE(),
@@ -291,6 +287,166 @@ describe("MaisonEnergyToken", function () {
       // Verify token is marked as expired
       const updatedTokenDetail = await maisonEnergyToken.tokenDetails(tokenId);
       expect(updatedTokenDetail.isExpired).to.be.true;
+    });
+  });
+
+  describe("Token Settlement", function () {
+    beforeEach(async function () {
+      // Mint tokens first
+      const amount = ethers.parseUnits("1000", 18);
+      const embeddedValue = ethers.parseUnits("0.1", 18);
+      const currentTime = BigInt(await time.latest());
+      const validFrom = currentTime + 3600n;
+      const validTo = validFrom + 86400n;
+
+      await mockUSDC.approve(await maisonEnergyToken.getAddress(), (amount * embeddedValue) / ethers.parseUnits("1", 18) * 100n / BASE_BIPS);
+
+      const energyAttributes: EnergyAttributes = {
+        zone: 0,
+        physicalDelivery: 0,
+        physicalDeliveryHours: 0,
+        physicalDeliveryDays: 0,
+        fuelType: 0
+      };
+
+      await maisonEnergyToken.connect(issuer).mint(
+        amount,
+        embeddedValue,
+        validFrom,
+        validTo,
+        "ERCOT123",
+        energyAttributes
+      );
+
+      // Transfer some tokens to user
+      await maisonEnergyToken.connect(issuer).safeTransferFrom(
+        await issuer.getAddress(),
+        await user.getAddress(),
+        0, // tokenId
+        amount / 2n,
+        "0x"
+      );
+
+      // Grant BACKEND_ROLE to owner
+      await maisonEnergyToken.grantRole(
+        await maisonEnergyToken.BACKEND_ROLE(),
+        await owner.getAddress()
+      );
+
+      // Fast forward time to expiration
+      await time.increaseTo(validTo);
+      await maisonEnergyToken.performUpkeep(ethers.AbiCoder.defaultAbiCoder().encode(["uint256"], [0]));
+    });
+
+    describe("settleDebtsForExpiration", function () {
+      it("Should allow backend to settle debts for expired tokens", async function () {
+        const tokenId = 0;
+        const tokenHolders = [await user.getAddress()];
+        const amountOwed = [ethers.parseUnits("50", 6)]; // $50 worth of USDC
+
+        // Approve USDC transfer for issuer
+        await mockUSDC.connect(issuer).approve(tokenHolders[0], amountOwed[0]);
+
+        await expect(maisonEnergyToken.connect(owner).settleDebtsForExpiration(
+          tokenId,
+          tokenHolders,
+          amountOwed
+        )).to.emit(maisonEnergyToken, "Settled");
+      });
+
+      it("Should not allow non-backend role to settle debts", async function () {
+        const tokenId = 0;
+        const tokenHolders = [await user.getAddress()];
+        const amountOwed = [ethers.parseUnits("50", 6)];
+
+        await expect(maisonEnergyToken.connect(user).settleDebtsForExpiration(
+          tokenId,
+          tokenHolders,
+          amountOwed
+        )).to.be.revertedWithCustomError(maisonEnergyToken, "AccessControlUnauthorizedAccount");
+      });
+
+      it("Should not allow settling debts for non-expired tokens", async function () {
+        const tokenId = 0;
+        const tokenHolders = [await user.getAddress()];
+        const amountOwed = [ethers.parseUnits("50", 6)];
+
+        // Create a new token that hasn't expired
+        const amount = ethers.parseUnits("1000", 18);
+        const embeddedValue = ethers.parseUnits("0.1", 18);
+        const currentTime = BigInt(await time.latest());
+        const validFrom = currentTime + 3600n;
+        const validTo = validFrom + 86400n;
+
+        await mockUSDC.approve(await maisonEnergyToken.getAddress(), (amount * embeddedValue) / ethers.parseUnits("1", 18) * 100n / BASE_BIPS);
+
+        const energyAttributes: EnergyAttributes = {
+          zone: 0,
+          physicalDelivery: 0,
+          physicalDeliveryHours: 0,
+          physicalDeliveryDays: 0,
+          fuelType: 0
+        };
+
+        await maisonEnergyToken.connect(issuer).mint(
+          amount,
+          embeddedValue,
+          validFrom,
+          validTo,
+          "ERCOT123",
+          energyAttributes
+        );
+
+        await expect(maisonEnergyToken.connect(owner).settleDebtsForExpiration(
+          1, // new token ID
+          tokenHolders,
+          amountOwed
+        )).to.be.revertedWith("Token not expired yet");
+      });
+    });
+
+    describe("manualSettle", function () {
+      it("Should allow issuer to manually settle debts", async function () {
+        const tokenId = 0;
+        const tokenHolders = [await user.getAddress()];
+        const amountOwed = [ethers.parseUnits("50", 6)];
+
+        // Approve USDC transfer for issuer
+        await mockUSDC.connect(issuer).approve(await maisonEnergyToken.getAddress(), amountOwed[0]);
+
+        await expect(maisonEnergyToken.connect(issuer).manualSettle(
+          tokenId,
+          tokenHolders,
+          amountOwed
+        )).to.emit(maisonEnergyToken, "Settled");
+      });
+
+      it("Should not allow non-issuer to manually settle debts", async function () {
+        const tokenId = 0;
+        const tokenHolders = [await user.getAddress()];
+        const amountOwed = [ethers.parseUnits("50", 6)];
+
+        await expect(maisonEnergyToken.connect(user).manualSettle(
+          tokenId,
+          tokenHolders,
+          amountOwed
+        )).to.be.revertedWith("You are not an issuer of this token");
+      });
+
+      it("Should handle partial settlement correctly", async function () {
+        const tokenId = 0;
+        const tokenHolders = [await user.getAddress()];
+        const amountOwed = [ethers.parseUnits("50", 6)];
+
+        // Approve only half the amount
+        await mockUSDC.connect(issuer).approve(await maisonEnergyToken.getAddress(), amountOwed[0] / 2n);
+
+        await expect(maisonEnergyToken.connect(issuer).manualSettle(
+          tokenId,
+          tokenHolders,
+          amountOwed
+        )).to.emit(maisonEnergyToken, "SettlementFailed");
+      });
     });
   });
 }); 

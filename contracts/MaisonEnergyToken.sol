@@ -75,6 +75,12 @@ contract MaisonEnergyToken is
     IERCOTPriceOracle public priceOracle;
     IERC20 public usdc;
 
+    /**
+     * @notice Initializes the contract with required addresses and sets up initial roles
+     * @param _priceOracleAddress Address of the ERCOT price oracle contract
+     * @param _insuranceAddress Address where collateral will be sent
+     * @param _usdcAddress Address of the USDC token contract
+     */
     function initialize(
         address _priceOracleAddress,
         address _insuranceAddress,
@@ -100,6 +106,15 @@ contract MaisonEnergyToken is
         insuranceAddress = _insuranceAddress;
     }
 
+    /**
+     * @notice Mints new energy tokens with specified attributes
+     * @param amount Amount of tokens to mint
+     * @param embeddedValue Embedded value of the token
+     * @param validFrom Timestamp when the token becomes valid
+     * @param validTo Timestamp when the token expires
+     * @param ercotSupplyId ERCOT supply identifier
+     * @param energyAttributes Energy attributes including zone and physical delivery details
+     */
     function mint(
         uint256 amount,
         uint256 embeddedValue,
@@ -168,7 +183,11 @@ contract MaisonEnergyToken is
         _;
     }
 
-    // This is for Token Issuer
+    /**
+     * @notice Allows token issuer to destroy their own tokens
+     * @param amount Amount of tokens to destroy
+     * @param id Token ID to destroy
+     */
     function destroy(uint256 amount, uint256 id) external onlyIssuer(id) {
         TokenDetail storage token = tokenDetails[id];
 
@@ -193,7 +212,11 @@ contract MaisonEnergyToken is
         emit TokenDestroyed(msg.sender, id, amount);
     }
 
-    // This is for User
+    /**
+     * @notice Allows users to redeem their energy tokens
+     * @param id Token ID to redeem
+     * @param amount Amount of tokens to redeem
+     */
     function redeem(uint256 id, uint256 amount) external {
         TokenDetail storage token = tokenDetails[id];
 
@@ -213,9 +236,14 @@ contract MaisonEnergyToken is
         emit Redeemed(msg.sender, id, amount, block.timestamp);
     }
 
-    // Expiration - Chainlink Automation checks this regularly
+    /**
+     * @notice Chainlink Automation function to check if any tokens need expiration
+     * @param checkData Additional data for the check (unused)
+     * @return upkeepNeeded Whether upkeep is needed
+     * @return performData Data to be used in performUpkeep if needed
+     */
     function checkUpkeep(
-        bytes calldata
+        bytes calldata checkData
     )
         external
         view
@@ -231,7 +259,10 @@ contract MaisonEnergyToken is
         return (false, "");
     }
 
-    // Chainlink Automation executes this when checkUpkeep returns true
+    /**
+     * @notice Chainlink Automation function to perform token expiration
+     * @param performData Data containing the token ID to expire
+     */
     function performUpkeep(bytes calldata performData) external override {
         uint256 id = abi.decode(performData, (uint256));
 
@@ -244,7 +275,12 @@ contract MaisonEnergyToken is
         emit TokenExpirationRequested(id, block.timestamp);
     }
 
-    // Backend action: This function should be called by backend 24 hrs later once it subscribes token expiration event and tries 3 times
+    /**
+     * @notice Backend function to settle debts for expired tokens
+     * @param id Token ID to settle debts for
+     * @param tokenHolders Array of token holders who are owed settlement
+     * @param amountOwed Array of amounts owed to each token holder
+     */
     function settleDebtsForExpiration(
         uint256 id,
         address[] memory tokenHolders,
@@ -296,7 +332,12 @@ contract MaisonEnergyToken is
         }
     }
 
-    // Manual - manually by Issuer
+    /**
+     * @notice Allows issuer to manually settle debts for expired tokens
+     * @param id Token ID to settle debts for
+     * @param tokenHolders Array of token holders who are owed settlement
+     * @param amountOwed Array of amounts owed to each token holder
+     */
     function manualSettle(
         uint256 id,
         address[] memory tokenHolders,
@@ -333,6 +374,11 @@ contract MaisonEnergyToken is
         }
     }
 
+    /**
+     * @notice Returns token metrics including volume and details
+     * @param id Token ID to get metrics for
+     * @return TokenMetrics struct containing token statistics
+     */
     function getTokenMetrics(
         uint256 id
     ) public view returns (TokenMetrics memory) {
@@ -358,6 +404,11 @@ contract MaisonEnergyToken is
             });
     }
 
+    /**
+     * @notice Returns metrics for a representative address
+     * @param repAddress Address of the representative
+     * @return Various metrics including total redeemed, allocated, and expiring tokens
+     */
     function getRepMetrics(
         address repAddress
     )
@@ -408,6 +459,11 @@ contract MaisonEnergyToken is
         }
     }
 
+    /**
+     * @notice Checks if an issuer has any outstanding debts
+     * @param issuer Address of the issuer to check
+     * @return bool Whether the issuer has any debts
+     */
     function hasDebt(address issuer) public view returns (bool) {
         uint256[] memory issuerTokens = tokenIdsForIssuer[issuer];
 
@@ -421,6 +477,11 @@ contract MaisonEnergyToken is
         return false; // No debts found
     }
 
+    /**
+     * @notice Checks if an issuer has any pending promise-to-pay
+     * @param issuer Address of the issuer to check
+     * @return bool Whether the issuer has any pending promise-to-pay
+     */
     function hasPendingPromiseToPay(address issuer) public view returns (bool) {
         uint256[] memory issuerTokens = tokenIdsForIssuer[issuer];
 
@@ -434,6 +495,11 @@ contract MaisonEnergyToken is
         return false;
     }
 
+    /**
+     * @notice ERC165 interface support check
+     * @param interfaceId Interface ID to check
+     * @return bool Whether the contract supports the given interface
+     */
     function supportsInterface(
         bytes4 interfaceId
     )
