@@ -34,8 +34,8 @@ contract MaisonEnergyOrderBook is
 
     mapping(OrderType => mapping(CommonTypes.ZoneType => mapping(CommonTypes.PhysicalDeliveryType => uint256[])))
         public activeOrderIds;
-    mapping(uint256 => Order) private ordersById;
-    mapping(address => uint256[]) private ordersByUser; // Tracks order IDs by user
+    mapping(uint256 => Order) public ordersById;
+    mapping(address => uint256[]) public ordersByUser; // Tracks order IDs by user
 
     IERC20 public usdc;
     MaisonEnergyToken public maisonEnergyToken;
@@ -83,7 +83,7 @@ contract MaisonEnergyOrderBook is
 
         usdc.safeTransferFrom(msg.sender, address(this), usdcAmount);
 
-        Order memory marketOrder = Order({
+        Order memory buyMarketOrder = Order({
             id: nonce,
             trader: msg.sender,
             tokenId: tokenId,
@@ -101,16 +101,16 @@ contract MaisonEnergyOrderBook is
             createdAt: block.timestamp
         });
 
-        nonce++;
-
-        ordersById[nonce] = marketOrder;
+        ordersById[nonce] = buyMarketOrder;
         ordersByUser[msg.sender].push(nonce);
 
-        Order[] memory activeSellOrders = getActiveOrders(
-            OrderType.SELL,
-            orderMetadata.zone,
-            orderMetadata.physicalDelivery
-        );
+        OrderMetadata memory sellMetadata = OrderMetadata({
+            orderType: OrderType.SELL,
+            zone: orderMetadata.zone,
+            physicalDelivery: orderMetadata.physicalDelivery
+        });
+
+        Order[] memory activeSellOrders = getActiveOrders(sellMetadata);
         require(activeSellOrders.length > 0, "No active sell orders");
 
         uint256 totalTokens = 0;
@@ -118,7 +118,7 @@ contract MaisonEnergyOrderBook is
 
         for (
             uint256 i = activeSellOrders.length;
-            i > 0 && marketOrder.remainUsdcAmount > 0;
+            i > 0 && buyMarketOrder.remainUsdcAmount > 0;
 
         ) {
             uint256 currentPrice = activeSellOrders[i - 1].desiredPrice;
@@ -136,9 +136,9 @@ contract MaisonEnergyOrderBook is
             // Compute total time weight for this price group
             uint256 totalWeight = 0;
             for (uint256 k = start; k < end; k++) {
-                Order memory o = activeSellOrders[k];
-                if (!isInvalidOrder(o.id)) {
-                    uint256 w = nowTime - o.createdAt;
+                Order memory activeSellOrder = activeSellOrders[k];
+                if (!isInvalidOrder(activeSellOrder.id)) {
+                    uint256 w = nowTime - activeSellOrder.createdAt;
                     if (w == 0) w = 1;
                     totalWeight += w;
                 }
@@ -149,9 +149,7 @@ contract MaisonEnergyOrderBook is
                 uint256 tokenFilled,
                 uint256 usdcUsed
             ) = distributeBuyOrderAcrossPriceLevel(
-                    orderMetadata.zone,
-                    orderMetadata.physicalDelivery,
-                    marketOrder,
+                    buyMarketOrder,
                     currentPrice,
                     start,
                     end,
@@ -160,17 +158,23 @@ contract MaisonEnergyOrderBook is
                 );
 
             totalTokens += tokenFilled;
-            marketOrder.remainUsdcAmount -= usdcUsed;
+            buyMarketOrder.remainUsdcAmount -= usdcUsed;
 
             i = start; // move to next price level
         }
 
-        if (marketOrder.remainUsdcAmount > 0) {
-            revert("Insufficient Token Supply");
+        if (buyMarketOrder.remainUsdcAmount > 0) {
+            // revert("Insufficient Token Supply");
+
+            // If there are still USDC left, refund it back to the trader
+            usdc.safeTransfer(
+                buyMarketOrder.trader,
+                buyMarketOrder.remainUsdcAmount
+            );
         }
 
-        fullfilledOrderIds.push(marketOrder.id);
-        cleanLimitOrders(orderMetadata.zone, orderMetadata.physicalDelivery);
+        fullfilledOrderIds.push(nonce);
+        cleanLimitOrders(buyMarketOrder.orderMetadata);
 
         (uint256 _realAmount, uint256 _feeAmount) = getAmountDeductFee(
             totalTokens,
@@ -190,25 +194,29 @@ contract MaisonEnergyOrderBook is
             _feeAmount,
             ""
         );
+
+        buyMarketOrder.lastTradeTimestamp = block.timestamp;
+
+        nonce++;
     }
 
     function distributeBuyOrderAcrossPriceLevel(
-        CommonTypes.ZoneType zone,
-        CommonTypes.PhysicalDeliveryType physicalDelivery,
-        Order memory marketOrderMem,
+        Order memory buyOrder,
         uint256 currentPrice,
         uint256 start,
         uint256 end,
         uint256 totalWeight,
         uint256 nowTime
     ) internal returns (uint256 tokenFilled, uint256 usdcUsed) {
-        Order[] memory activeSellOrders = getActiveOrders(
-            OrderType.SELL,
-            zone,
-            physicalDelivery
-        );
+        OrderMetadata memory sellMetadata = OrderMetadata({
+            orderType: OrderType.SELL,
+            zone: buyOrder.orderMetadata.zone,
+            physicalDelivery: buyOrder.orderMetadata.physicalDelivery
+        });
 
-        uint256 remainUsdcAmount = marketOrderMem.remainUsdcAmount;
+        Order[] memory activeSellOrders = getActiveOrders(sellMetadata);
+
+        uint256 remainUsdcAmount = buyOrder.remainUsdcAmount;
         uint256 remainTotalWeight = totalWeight;
 
         for (uint256 k = start; k < end && remainUsdcAmount > 0; k++) {
@@ -271,7 +279,7 @@ contract MaisonEnergyOrderBook is
             ""
         );
 
-        Order memory marketOrder = Order({
+        Order memory sellMarketOrder = Order({
             id: nonce,
             trader: msg.sender,
             tokenId: tokenId,
@@ -289,16 +297,16 @@ contract MaisonEnergyOrderBook is
             createdAt: block.timestamp
         });
 
-        nonce++;
-
-        ordersById[nonce] = marketOrder;
+        ordersById[nonce] = sellMarketOrder;
         ordersByUser[msg.sender].push(nonce);
 
-        Order[] memory activeBuyOrders = getActiveOrders(
-            OrderType.BUY,
-            orderMetadata.zone,
-            orderMetadata.physicalDelivery
-        );
+        OrderMetadata memory buyMetadata = OrderMetadata({
+            orderType: OrderType.SELL,
+            zone: orderMetadata.zone,
+            physicalDelivery: orderMetadata.physicalDelivery
+        });
+
+        Order[] memory activeBuyOrders = getActiveOrders(buyMetadata);
 
         // If there are no active buy orders, send tokens to insurance address
         if (activeBuyOrders.length == 0) {
@@ -322,7 +330,7 @@ contract MaisonEnergyOrderBook is
 
         for (
             uint256 i = activeBuyOrders.length;
-            i > 0 && marketOrder.remainTokenAmount > 0;
+            i > 0 && sellMarketOrder.remainTokenAmount > 0;
 
         ) {
             uint256 currentPrice = activeBuyOrders[i - 1].desiredPrice;
@@ -351,11 +359,9 @@ contract MaisonEnergyOrderBook is
             // Apply time-weighted matching
             (
                 uint256 usdcFilled,
-                uint256 quantityFilled
+                uint256 tokenAmountUsed
             ) = distributeSellOrderAcrossPriceLevel(
-                    orderMetadata.zone,
-                    orderMetadata.physicalDelivery,
-                    marketOrder,
+                    sellMarketOrder,
                     currentPrice,
                     start,
                     end,
@@ -364,74 +370,76 @@ contract MaisonEnergyOrderBook is
                 );
 
             totalUsdc += usdcFilled;
-            marketOrder.remainTokenAmount -= quantityFilled;
+            sellMarketOrder.remainTokenAmount -= tokenAmountUsed;
 
             i = start;
         }
 
-        if (marketOrder.remainTokenAmount > 0) {
+        if (sellMarketOrder.remainTokenAmount > 0) {
             maisonEnergyToken.safeTransferFrom(
                 address(this),
                 insuranceAddress,
                 tokenId,
-                marketOrder.remainTokenAmount,
+                sellMarketOrder.remainTokenAmount,
                 ""
             );
             emit NoLiquiditySellOrderCreated(
                 msg.sender,
-                marketOrder.remainTokenAmount,
+                sellMarketOrder.remainTokenAmount,
                 block.timestamp
             );
         }
 
-        fullfilledOrderIds.push(marketOrder.id);
-        cleanLimitOrders(orderMetadata.zone, orderMetadata.physicalDelivery);
+        fullfilledOrderIds.push(sellMarketOrder.id);
+        cleanLimitOrders(sellMarketOrder.orderMetadata);
 
         // Transfer USDC to seller
         (uint256 realAmount, uint256 feeAmount) = getAmountDeductFee(
             totalUsdc,
             OrderType.SELL
         );
-        usdc.safeTransfer(marketOrder.trader, realAmount);
+        usdc.safeTransfer(sellMarketOrder.trader, realAmount);
         usdc.safeTransfer(treasury, feeAmount);
 
-        marketOrder.lastTradeTimestamp = block.timestamp;
+        sellMarketOrder.lastTradeTimestamp = block.timestamp;
+
+        nonce++;
     }
 
     function distributeSellOrderAcrossPriceLevel(
-        CommonTypes.ZoneType zone,
-        CommonTypes.PhysicalDeliveryType physicalDelivery,
-        Order memory marketOrderMem,
+        Order memory sellOrder,
         uint256 currentPrice,
         uint256 start,
         uint256 end,
         uint256 totalWeight,
         uint256 nowTime
-    ) internal returns (uint256 usdcFilled, uint256 tokenAmountFilled) {
-        Order[] memory activeBuyOrders = getActiveOrders(
-            OrderType.BUY,
-            zone,
-            physicalDelivery
-        );
+    ) internal returns (uint256 usdcFilled, uint256 tokenAmountUsed) {
+        OrderMetadata memory buyMetadata = OrderMetadata({
+            orderType: OrderType.BUY,
+            zone: sellOrder.orderMetadata.zone,
+            physicalDelivery: sellOrder.orderMetadata.physicalDelivery
+        });
 
-        uint256 remainTokenAmount = marketOrderMem.remainTokenAmount;
+        Order[] memory activeBuyOrders = getActiveOrders(buyMetadata);
+
+        uint256 remainTokenAmount = sellOrder.remainTokenAmount;
         uint256 remainTotalWeight = totalWeight;
 
         for (uint256 k = start; k < end && remainTokenAmount > 0; k++) {
-            Order memory buyOrder = activeBuyOrders[k];
-            if (isInvalidOrder(buyOrder.id)) continue;
+            Order memory activeBuyOrder = activeBuyOrders[k];
+            if (isInvalidOrder(activeBuyOrder.id)) continue;
 
-            uint256 weight = nowTime - buyOrder.createdAt;
+            uint256 weight = nowTime - activeBuyOrder.createdAt;
             if (weight == 0) weight = 1;
 
             uint256 share = (remainTokenAmount * weight) / remainTotalWeight;
-            if (share > buyOrder.remainTokenAmount) {
-                share = buyOrder.remainTokenAmount;
+            if (share > activeBuyOrder.remainTokenAmount) {
+                share = activeBuyOrder.remainTokenAmount;
             }
 
             uint256 usdcAmount = (share * currentPrice) / 10 ** price_decimals;
-            if (usdcAmount > buyOrder.remainUsdcAmount) {
-                usdcAmount = buyOrder.remainUsdcAmount;
+            if (usdcAmount > activeBuyOrder.remainUsdcAmount) {
+                usdcAmount = activeBuyOrder.remainUsdcAmount;
                 share = (usdcAmount * 10 ** price_decimals) / currentPrice;
             }
 
@@ -441,109 +449,44 @@ contract MaisonEnergyOrderBook is
             );
             maisonEnergyToken.safeTransferFrom(
                 address(this),
-                buyOrder.trader,
-                marketOrderMem.tokenId,
+                activeBuyOrder.trader,
+                sellOrder.tokenId,
                 realAmount,
                 ""
             );
             maisonEnergyToken.safeTransferFrom(
                 address(this),
                 treasury,
-                marketOrderMem.tokenId,
+                sellOrder.tokenId,
                 feeAmount,
                 ""
             );
 
-            buyOrder.remainTokenAmount -= share;
-            buyOrder.remainUsdcAmount -= usdcAmount;
-            buyOrder.lastTradeTimestamp = block.timestamp;
+            activeBuyOrder.remainUsdcAmount -= usdcAmount;
+            activeBuyOrder.lastTradeTimestamp = block.timestamp;
 
-            if (buyOrder.remainTokenAmount == 0) {
-                buyOrder.isFilled = true;
+            if (activeBuyOrder.remainTokenAmount == 0) {
+                activeBuyOrder.isFilled = true;
             }
 
             usdcFilled += usdcAmount;
-            tokenAmountFilled += share;
-
+            tokenAmountUsed += share;
             remainTotalWeight -= weight;
             remainTokenAmount -= share;
         }
-    }
-
-    function cleanLimitOrders(
-        CommonTypes.ZoneType zone,
-        CommonTypes.PhysicalDeliveryType physicalDelivery
-    ) internal {
-        Order[] memory activeBuyOrders = getActiveOrders(
-            OrderType.BUY,
-            zone,
-            physicalDelivery
-        );
-        Order[] memory activeSellOrders = getActiveOrders(
-            OrderType.SELL,
-            zone,
-            physicalDelivery
-        );
-
-        while (
-            activeBuyOrders.length > 0 &&
-            isInvalidOrder(activeBuyOrders[activeBuyOrders.length - 1].id)
-        ) {
-            removeLastFromBuyLimitOrder(zone, physicalDelivery);
-        }
-        while (
-            activeSellOrders.length > 0 &&
-            isInvalidOrder(activeSellOrders[activeSellOrders.length - 1].id)
-        ) {
-            removeLastFromSellLimitOrder(zone, physicalDelivery);
-        }
-    }
-
-    function removeLastFromBuyLimitOrder(
-        CommonTypes.ZoneType zone,
-        CommonTypes.PhysicalDeliveryType physicalDelivery
-    ) internal {
-        Order[] memory activeBuyOrders = getActiveOrders(
-            OrderType.BUY,
-            zone,
-            physicalDelivery
-        );
-
-        Order memory lastOrder = activeBuyOrders[activeBuyOrders.length - 1];
-
-        (activeOrderIds[OrderType.BUY][zone][physicalDelivery]).pop();
-        fullfilledOrderIds.push(lastOrder.id);
-    }
-
-    function removeLastFromSellLimitOrder(
-        CommonTypes.ZoneType zone,
-        CommonTypes.PhysicalDeliveryType physicalDelivery
-    ) internal {
-        Order[] memory activeSellOrders = getActiveOrders(
-            OrderType.SELL,
-            zone,
-            physicalDelivery
-        );
-
-        Order memory lastOrder = activeSellOrders[activeSellOrders.length - 1];
-        (activeOrderIds[OrderType.SELL][zone][physicalDelivery]).pop();
-        fullfilledOrderIds.push(lastOrder.id);
     }
 
     /**
      * @dev Create new limit order
      */
     function createLimitOrder(
+        uint256 usdcAmount, // For Buy
         uint256 desiredPrice,
         uint256 tokenAmount,
         uint256 validTo,
         uint256 tokenId,
         OrderMetadata memory orderMetadata
     ) external {
-        uint256 usdcAmount = (desiredPrice * tokenAmount) /
-            10 ** price_decimals;
-        Order memory newOrder;
-
         require(validTo > block.timestamp, "Invalid time limit");
 
         if (orderMetadata.orderType == OrderType.BUY) {
@@ -552,23 +495,6 @@ contract MaisonEnergyOrderBook is
                 address(this),
                 desiredPrice * tokenAmount
             );
-            newOrder = Order({
-                id: nonce,
-                trader: msg.sender,
-                tokenId: tokenId,
-                orderMetadata: orderMetadata,
-                desiredPrice: desiredPrice,
-                tokenAmount: tokenAmount,
-                remainTokenAmount: tokenAmount,
-                usdcAmount: usdcAmount,
-                remainUsdcAmount: usdcAmount,
-                isCanceled: false,
-                isFilled: false,
-                isMarketOrder: false,
-                validTo: validTo,
-                lastTradeTimestamp: 0,
-                createdAt: block.timestamp
-            });
         } else {
             maisonEnergyToken.safeTransferFrom(
                 msg.sender,
@@ -577,26 +503,26 @@ contract MaisonEnergyOrderBook is
                 tokenAmount,
                 ""
             );
-            newOrder = Order({
-                id: nonce,
-                trader: msg.sender,
-                tokenId: tokenId,
-                orderMetadata: orderMetadata,
-                desiredPrice: desiredPrice,
-                tokenAmount: tokenAmount,
-                remainTokenAmount: tokenAmount,
-                usdcAmount: 0,
-                remainUsdcAmount: 0,
-                isCanceled: false,
-                isFilled: false,
-                isMarketOrder: false,
-                validTo: validTo,
-                lastTradeTimestamp: 0,
-                createdAt: block.timestamp
-            });
         }
 
-        nonce++;
+        Order memory newOrder = Order({
+            id: nonce,
+            trader: msg.sender,
+            tokenId: tokenId,
+            orderMetadata: orderMetadata,
+            desiredPrice: desiredPrice,
+            tokenAmount: tokenAmount,
+            remainTokenAmount: tokenAmount,
+            usdcAmount: usdcAmount,
+            remainUsdcAmount: usdcAmount,
+            isFilled: false,
+            isMarketOrder: false,
+            isCanceled: false,
+            validTo: validTo,
+            lastTradeTimestamp: 0,
+            createdAt: block.timestamp
+        });
+
         ordersById[nonce] = newOrder;
         ordersByUser[msg.sender].push(nonce);
 
@@ -604,11 +530,13 @@ contract MaisonEnergyOrderBook is
 
         // Try to match with opposite orders at the same or better price
         if (orderMetadata.orderType == OrderType.BUY) {
-            Order[] memory activeSellOrders = getActiveOrders(
-                OrderType.SELL,
-                orderMetadata.zone,
-                orderMetadata.physicalDelivery
-            );
+            OrderMetadata memory sellMetadata = OrderMetadata({
+                orderType: OrderType.SELL,
+                zone: orderMetadata.zone,
+                physicalDelivery: orderMetadata.physicalDelivery
+            });
+
+            Order[] memory activeSellOrders = getActiveOrders(sellMetadata);
 
             // match with lowest priced sells ≤ desiredPrice
             for (
@@ -619,7 +547,7 @@ contract MaisonEnergyOrderBook is
                 Order memory sellOrder = activeSellOrders[i - 1];
                 if (
                     isInvalidOrder(sellOrder.id) ||
-                    sellOrder.desiredPrice > desiredPrice
+                    sellOrder.desiredPrice > newOrder.desiredPrice
                 ) {
                     i--;
                     continue;
@@ -651,8 +579,6 @@ contract MaisonEnergyOrderBook is
                     uint256 tokenFilled,
                     uint256 usdcUsed
                 ) = distributeBuyOrderAcrossPriceLevel(
-                        orderMetadata.zone,
-                        orderMetadata.physicalDelivery,
                         newOrder,
                         currentPrice,
                         j,
@@ -661,7 +587,27 @@ contract MaisonEnergyOrderBook is
                         nowTime
                     );
 
-                newOrder.remainTokenAmount -= tokenFilled;
+                // Apply fees for the matched tokens
+                (
+                    uint256 realTokenAmount,
+                    uint256 feeTokenAmount
+                ) = getAmountDeductFee(tokenFilled, OrderType.BUY);
+
+                maisonEnergyToken.safeTransferFrom(
+                    address(this),
+                    newOrder.trader,
+                    tokenId,
+                    realTokenAmount,
+                    ""
+                );
+                maisonEnergyToken.safeTransferFrom(
+                    address(this),
+                    treasury,
+                    tokenId,
+                    feeTokenAmount,
+                    ""
+                );
+
                 newOrder.remainUsdcAmount -= usdcUsed;
 
                 i = j;
@@ -671,15 +617,18 @@ contract MaisonEnergyOrderBook is
             if (newOrder.remainTokenAmount > 0) {
                 insertLimitOrder(newOrder.id);
             } else {
+                newOrder.isFilled = true;
                 ordersById[nonce] = newOrder;
                 fullfilledOrderIds.push(newOrder.id);
             }
         } else {
-            Order[] memory activeBuyOrders = getActiveOrders(
-                OrderType.BUY,
-                orderMetadata.zone,
-                orderMetadata.physicalDelivery
-            );
+            OrderMetadata memory buyMetadata = OrderMetadata({
+                orderType: OrderType.SELL,
+                zone: orderMetadata.zone,
+                physicalDelivery: orderMetadata.physicalDelivery
+            });
+
+            Order[] memory activeBuyOrders = getActiveOrders(buyMetadata);
 
             // SELL order — match with highest priced buys ≥ desiredPrice
             for (
@@ -717,11 +666,9 @@ contract MaisonEnergyOrderBook is
 
                 // Time-weighted distribution
                 (
-                    ,
+                    uint256 usdcFilled,
                     uint256 tokenAmountFilled
                 ) = distributeSellOrderAcrossPriceLevel(
-                        orderMetadata.zone,
-                        orderMetadata.physicalDelivery,
                         newOrder,
                         currentPrice,
                         j,
@@ -730,8 +677,27 @@ contract MaisonEnergyOrderBook is
                         nowTime
                     );
 
+                // Apply fees for the matched USDC
+                (
+                    uint256 realUsdcAmount,
+                    uint256 feeUsdcAmount
+                ) = getAmountDeductFee(usdcFilled, OrderType.SELL);
+                maisonEnergyToken.safeTransferFrom(
+                    address(this),
+                    newOrder.trader,
+                    tokenId,
+                    realUsdcAmount,
+                    ""
+                );
+                maisonEnergyToken.safeTransferFrom(
+                    address(this),
+                    treasury,
+                    tokenId,
+                    feeUsdcAmount,
+                    ""
+                );
+
                 newOrder.remainTokenAmount -= tokenAmountFilled;
-                // newOrder.remainUsdcAmount -= usdcFilled;
 
                 i = j;
             }
@@ -740,12 +706,37 @@ contract MaisonEnergyOrderBook is
             if (newOrder.remainTokenAmount > 0) {
                 insertLimitOrder(newOrder.id);
             } else {
+                newOrder.isFilled = true;
                 ordersById[nonce] = newOrder;
                 fullfilledOrderIds.push(newOrder.id);
             }
         }
 
-        cleanLimitOrders(orderMetadata.zone, orderMetadata.physicalDelivery);
+        cleanLimitOrders(newOrder.orderMetadata);
+
+        nonce++;
+    }
+
+    function cleanLimitOrders(OrderMetadata memory orderMetadata) internal {
+        uint256[] storage orderIds = activeOrderIds[orderMetadata.orderType][
+            orderMetadata.zone
+        ][orderMetadata.physicalDelivery];
+        uint256 writeIndex = 0;
+
+        for (uint256 readIndex = 0; readIndex < orderIds.length; readIndex++) {
+            if (!isInvalidOrder(ordersById[orderIds[readIndex]].id)) {
+                if (writeIndex != readIndex) {
+                    orderIds[writeIndex] = orderIds[readIndex];
+                }
+                writeIndex++;
+            } else {
+                fullfilledOrderIds.push(orderIds[readIndex]);
+            }
+        }
+
+        while (orderIds.length > writeIndex) {
+            orderIds.pop();
+        }
     }
 
     function insertLimitOrder(uint256 orderId) internal {
@@ -813,7 +804,7 @@ contract MaisonEnergyOrderBook is
     function performUpkeep(bytes calldata performData) external override {
         uint256 orderId = abi.decode(performData, (uint256));
 
-        Order storage order = _getOrderById(orderId);
+        Order storage order = ordersById[orderId];
         order.isFilled = true;
 
         emit NoLiquiditySellOrderCreated(
@@ -823,26 +814,9 @@ contract MaisonEnergyOrderBook is
         );
     }
 
-    function _getOrderById(
-        uint256 orderId
-    ) private view returns (Order storage) {
-        require(orderId < nonce, "Invalid order id");
-
-        Order storage order = ordersById[orderId];
-        require(order.id == orderId, "Order not found"); // Ensure order exists
-
-        return order;
-    }
-
-    function getOrderById(
-        uint256 orderId
-    ) external view returns (Order memory) {
-        return _getOrderById(orderId);
-    }
-
     modifier onlyOrderMaker(uint256 orderId) {
         require(orderId < nonce, "Invalid order id");
-        Order memory order = _getOrderById(orderId);
+        Order memory order = ordersById[orderId];
         require(
             order.trader == msg.sender,
             "You are not an maker of this order"
@@ -851,7 +825,7 @@ contract MaisonEnergyOrderBook is
     }
 
     function cancelOrder(uint256 orderId) external onlyOrderMaker(orderId) {
-        Order storage order = _getOrderById(orderId);
+        Order storage order = ordersById[orderId];
 
         require(
             order.tokenAmount > 0 && order.usdcAmount > 0,
@@ -928,11 +902,12 @@ contract MaisonEnergyOrderBook is
         // Iterate and collect valid orders
         for (uint256 i = 0; i < 4; i++) {
             for (uint256 j = 0; j < 3; j++) {
-                Order[] memory orders = getActiveOrders(
-                    orderType,
-                    CommonTypes.ZoneType(i),
-                    CommonTypes.PhysicalDeliveryType(j)
-                );
+                OrderMetadata memory orderMetadata = OrderMetadata({
+                    orderType: orderType,
+                    zone: CommonTypes.ZoneType(i),
+                    physicalDelivery: CommonTypes.PhysicalDeliveryType(j)
+                });
+                Order[] memory orders = getActiveOrders(orderMetadata);
 
                 // Copy results into the activeOrders array
                 for (uint256 k = 0; k < orders.length; k++) {
@@ -945,13 +920,11 @@ contract MaisonEnergyOrderBook is
     }
 
     function getActiveOrders(
-        OrderType orderType,
-        CommonTypes.ZoneType zone,
-        CommonTypes.PhysicalDeliveryType physicalDelivery
+        OrderMetadata memory orderMetadata
     ) public view returns (Order[] memory) {
-        uint256[] memory orderIds = activeOrderIds[orderType][zone][
-            physicalDelivery
-        ];
+        uint256[] memory orderIds = activeOrderIds[orderMetadata.orderType][
+            orderMetadata.zone
+        ][orderMetadata.physicalDelivery];
         uint256 totalOrders = orderIds.length;
 
         Order[] memory orders = new Order[](totalOrders);

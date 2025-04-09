@@ -39,21 +39,18 @@ interface IMaisonEnergyOrderBook {
         address indexed buyer,
         address indexed seller,
         uint256 price,
-        uint256 quantity
+        uint256 tokenAmount
     );
-    event SellMarketOrderCreated(address indexed seller, uint256 quantity);
+    event SellMarketOrderCreated(address indexed seller, uint256 tokenAmount);
     event LimitOrderCreated(
         address indexed trader,
         uint256 usdcAmount,
         uint256 desiredPrice,
-        uint256 quantity,
+        uint256 tokenAmount,
         uint256 timeInForce,
         OrderMetadata orderMetadata
     );
-    event OrderCanceled(
-        uint256 indexed orderId,
-        uint256 cancleTime
-    );
+    event OrderCanceled(uint256 indexed orderId, uint256 cancleTime);
     event NoLiquiditySellOrderCreated(
         address indexed tokenHolder,
         uint256 amount,
@@ -68,20 +65,20 @@ interface IMaisonEnergyOrderBook {
         OrderMetadata memory orderMetadata
     ) external;
     function createSellMarketOrder(
-        uint256 quantity,
+        uint256 tokenAmount,
         uint256 tokenId,
         OrderMetadata memory orderMetadata
     ) external;
     function createLimitOrder(
+        uint256 usdcAmount, // For Buy
         uint256 desiredPrice,
-        uint256 quantity,
+        uint256 tokenAmount,
         uint256 validTo,
         uint256 tokenId,
         OrderMetadata memory orderMetadata
     ) external;
     function cancelOrder(uint256 id) external;
 
-    function getOrderById(uint256 id) external view returns (Order memory);
     function setFeeBips(uint256 _buyFeeBips, uint256 _sellFeeBips) external;
     function setTreasury(address _treasury) external;
 }
