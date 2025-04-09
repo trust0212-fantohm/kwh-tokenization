@@ -3,13 +3,6 @@ pragma solidity ^0.8.19;
 import "../library/CommonTypes.sol";
 
 interface IMaisonEnergyToken {
-    struct EnergyAttributes {
-        CommonTypes.ZoneType zone;
-        CommonTypes.PhysicalDeliveryType physicalDelivery;
-        uint256 physicalDeliveryHours;
-        CommonTypes.PhysicalDeliveryDays physicalDeliveryDays;
-        CommonTypes.FuelType fuelType;
-    }
 
     event TokenMinted(
         address indexed issuer,
@@ -44,15 +37,4 @@ interface IMaisonEnergyToken {
     event TokenIssuerMarkedAsDefault(
         uint256 indexed tokenId
     );
-
-    function mint(
-        uint256 amount,
-        uint256 embeddedValue,
-        uint256 validFrom,
-        uint256 validTo,
-        string memory ercotSupplyId,
-        EnergyAttributes memory energyAttributes
-    ) external;
-    function redeem(uint256 id, uint256 amount) external;
-    function destroy(uint256 amount, uint256 id) external;
 }

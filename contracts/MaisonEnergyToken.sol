@@ -62,6 +62,14 @@ contract MaisonEnergyToken is
         EnergyAttributes energyAttributes;
     }
 
+    struct EnergyAttributes {
+        CommonTypes.ZoneType zone;
+        CommonTypes.PhysicalDeliveryType physicalDelivery;
+        uint256 physicalDeliveryHours;
+        CommonTypes.PhysicalDeliveryDays physicalDeliveryDays;
+        CommonTypes.FuelType fuelType;
+    }
+
     mapping(uint256 => TokenDetail) public tokenDetails;
     mapping(address => uint256) public redeemedTokensForUser;
     mapping(address => IssuerData) public issuerMetrics;
@@ -554,46 +562,61 @@ contract MaisonEnergyToken is
      * @param issuerAddress Address of the issuer to get metrics for
      * @return IssuerMetrics struct containing all issuer statistics
      */
-    function getIssuerMetrics(address issuerAddress) public view returns (IssuerMetrics memory) {
+    function getIssuerMetrics(
+        address issuerAddress
+    ) public view returns (IssuerMetrics memory) {
         IssuerMetrics memory metrics;
         uint256[] memory issuerTokens = tokenIdsForIssuer[issuerAddress];
-        
+
         // Initialize metrics
-        metrics.status = hasDebt(issuerAddress) ? IssuerStatus.Frozen : 
-                        hasPendingPromiseToPay(issuerAddress) ? IssuerStatus.Inactive : 
-                        IssuerStatus.Active;
-        
-        metrics.pendingPromiseToPay = issuerMetrics[issuerAddress].pendingPromiseToPayAmounts;
-        metrics.pendingPromiseToPayDefault = issuerMetrics[issuerAddress].pendingPromiseToPayDefault;
-        metrics.pendingPromiseToPayDefaultHonored = issuerMetrics[issuerAddress].pendingPromiseToPayDefaultHonored;
-        
+        metrics.status = hasDebt(issuerAddress)
+            ? IssuerStatus.Frozen
+            : hasPendingPromiseToPay(issuerAddress)
+                ? IssuerStatus.Inactive
+                : IssuerStatus.Active;
+
+        metrics.pendingPromiseToPay = issuerMetrics[issuerAddress]
+            .pendingPromiseToPayAmounts;
+        metrics.pendingPromiseToPayDefault = issuerMetrics[issuerAddress]
+            .pendingPromiseToPayDefault;
+        metrics.pendingPromiseToPayDefaultHonored = issuerMetrics[issuerAddress]
+            .pendingPromiseToPayDefaultHonored;
+
         // Calculate metrics for each token
         for (uint256 i = 0; i < issuerTokens.length; i++) {
             uint256 id = issuerTokens[i];
             TokenDetail memory token = tokenDetails[id];
-            
+
             // Total minted and volume metrics
             metrics.totalKwhMinted += token.totalMintedToken;
-            metrics.totalVolumeSoldKwh += (token.totalMintedToken - balanceOf(issuerAddress, id) - token.totalDestroyed);
+            metrics.totalVolumeSoldKwh += (token.totalMintedToken -
+                balanceOf(issuerAddress, id) -
+                token.totalDestroyed);
             metrics.tokensDestroyed += token.totalDestroyed;
-            
+
             // Get realtime price for dollar calculations
             (uint256 realtimePrice, ) = priceOracle.getRealTimePrice(
                 token.energyAttributes.zone,
                 token.energyAttributes.physicalDelivery
             );
-            
-            uint256 soldVolume = token.totalMintedToken - balanceOf(issuerAddress, id) - token.totalDestroyed;
-            metrics.totalVolumeSoldDollar += (soldVolume * realtimePrice) / 10 ** 18;
-            
+
+            uint256 soldVolume = token.totalMintedToken -
+                balanceOf(issuerAddress, id) -
+                token.totalDestroyed;
+            metrics.totalVolumeSoldDollar +=
+                (soldVolume * realtimePrice) /
+                10 ** 18;
+
             // Active and expired tokens
             if (token.isExpired) {
                 metrics.totalExpiredTokens += balanceOf(issuerAddress, id);
                 metrics.settledOnExpirationVolumeKwh += token.totalRedeemed;
-                metrics.settledOnExpirationVolumeDollar += (token.totalRedeemed * realtimePrice) / 10 ** 18;
+                metrics.settledOnExpirationVolumeDollar +=
+                    (token.totalRedeemed * realtimePrice) /
+                    10 ** 18;
             } else {
                 metrics.totalActiveTokens += balanceOf(issuerAddress, id);
-                
+
                 // Calculate tokens expiring in different time periods
                 uint256 timeToExpiry = token.validTo - block.timestamp;
                 if (timeToExpiry <= 30 days) {
@@ -616,30 +639,37 @@ contract MaisonEnergyToken is
                     metrics.tokensExpiringIn36 += balanceOf(issuerAddress, id);
                 }
             }
-            
+
             // Physical delivery settlement - count all physical delivery types
-            if (token.energyAttributes.physicalDelivery == CommonTypes.PhysicalDeliveryType.On_Peak ||
-                token.energyAttributes.physicalDelivery == CommonTypes.PhysicalDeliveryType.Off_Peak ||
-                token.energyAttributes.physicalDelivery == CommonTypes.PhysicalDeliveryType.All) {
+            if (
+                token.energyAttributes.physicalDelivery ==
+                CommonTypes.PhysicalDeliveryType.On_Peak ||
+                token.energyAttributes.physicalDelivery ==
+                CommonTypes.PhysicalDeliveryType.Off_Peak ||
+                token.energyAttributes.physicalDelivery ==
+                CommonTypes.PhysicalDeliveryType.All
+            ) {
                 metrics.settledForPhysicalDelivery += token.totalRedeemed;
             }
         }
-        
+
         // Calculate score based on various factors
         metrics.score = calculateIssuerScore(metrics);
-        
+
         return metrics;
     }
-    
+
     /**
      * @notice Calculates issuer score based on various metrics
      * @param metrics IssuerMetrics struct containing issuer statistics
      * @return uint256 Calculated score
      */
-    function calculateIssuerScore(IssuerMetrics memory metrics) internal pure returns (uint256) {
+    function calculateIssuerScore(
+        IssuerMetrics memory metrics
+    ) internal pure returns (uint256) {
         // Base score starts at 1000
         uint256 score = 1000;
-        
+
         // Deduct points for defaults and pending payments
         if (metrics.pendingPromiseToPayDefault > 0) {
             score -= 200;
@@ -647,29 +677,32 @@ contract MaisonEnergyToken is
         if (metrics.pendingPromiseToPay > 0) {
             score -= 100;
         }
-        
+
         // Add points for honored defaults
         if (metrics.pendingPromiseToPayDefaultHonored > 0) {
             score += 50;
         }
-        
+
         // Adjust score based on volume
-        if (metrics.totalVolumeSoldKwh > 1000000) { // 1M kWh
+        if (metrics.totalVolumeSoldKwh > 1000000) {
+            // 1M kWh
             score += 100;
-        } else if (metrics.totalVolumeSoldKwh > 100000) { // 100k kWh
+        } else if (metrics.totalVolumeSoldKwh > 100000) {
+            // 100k kWh
             score += 50;
         }
-        
+
         // Deduct points for high ratio of expired tokens
         if (metrics.totalExpiredTokens > 0) {
-            uint256 expiredRatio = (metrics.totalExpiredTokens * 100) / metrics.totalKwhMinted;
+            uint256 expiredRatio = (metrics.totalExpiredTokens * 100) /
+                metrics.totalKwhMinted;
             if (expiredRatio > 50) {
                 score -= 200;
             } else if (expiredRatio > 20) {
                 score -= 100;
             }
         }
-        
+
         return score;
     }
 }
