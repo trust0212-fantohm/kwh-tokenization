@@ -70,7 +70,6 @@ interface IMaisonEnergyOrderBook {
         OrderMetadata memory orderMetadata
     ) external;
     function createLimitOrder(
-        uint256 usdcAmount, // For Buy
         uint256 desiredPrice,
         uint256 tokenAmount,
         uint256 validTo,

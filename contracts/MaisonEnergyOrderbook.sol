@@ -22,12 +22,12 @@ contract MaisonEnergyOrderBook is
     using SafeERC20 for IERC20;
 
     uint256 private constant BASE_BIPS = 10000;
-    uint256 private constant price_decimals = 18;
+    uint256 private constant TOEKN_DECIMALS = 18;
 
     uint256 public nonce;
     uint256 public buyFeeBips;
     uint256 public sellFeeBips;
-    uint256[] public fullfilledOrderIds;
+    uint256[] public fulfilledOrderIds;
 
     address public treasury;
     address public insuranceAddress;
@@ -79,7 +79,7 @@ contract MaisonEnergyOrderBook is
             orderMetadata.orderType == OrderType.BUY,
             "Should be Buy Order"
         );
-        require(usdcAmount > 0, "Insufficient USDC amount");
+        require(usdcAmount > 0, "No USDC amount");
 
         usdc.safeTransferFrom(msg.sender, address(this), usdcAmount);
 
@@ -173,8 +173,8 @@ contract MaisonEnergyOrderBook is
             );
         }
 
-        fullfilledOrderIds.push(nonce);
-        cleanLimitOrders(buyMarketOrder.orderMetadata);
+        fulfilledOrderIds.push(nonce);
+        cleanLimitOrders(sellMetadata);
 
         (uint256 _realAmount, uint256 _feeAmount) = getAmountDeductFee(
             totalTokens,
@@ -182,7 +182,7 @@ contract MaisonEnergyOrderBook is
         );
         maisonEnergyToken.safeTransferFrom(
             address(this),
-            msg.sender,
+            buyMarketOrder.trader,
             tokenId,
             _realAmount,
             ""
@@ -220,33 +220,33 @@ contract MaisonEnergyOrderBook is
         uint256 remainTotalWeight = totalWeight;
 
         for (uint256 k = start; k < end && remainUsdcAmount > 0; k++) {
-            Order memory sellOrder = activeSellOrders[k];
-            if (isInvalidOrder(sellOrder.id)) continue;
+            Order memory activeSellOrder = activeSellOrders[k];
+            if (isInvalidOrder(activeSellOrder.id)) continue;
 
-            uint256 weight = nowTime - sellOrder.createdAt;
+            uint256 weight = nowTime - activeSellOrder.createdAt;
             if (weight == 0) weight = 1;
 
             uint256 usdcShare = (remainUsdcAmount * weight) / remainTotalWeight;
-            uint256 tokenQty = (usdcShare * 10 ** price_decimals) /
+            uint256 tokenQty = (usdcShare * 10 ** TOEKN_DECIMALS) /
                 currentPrice;
 
-            if (tokenQty > sellOrder.remainTokenAmount) {
-                tokenQty = sellOrder.remainTokenAmount;
-                usdcShare = (tokenQty * currentPrice) / 10 ** price_decimals;
+            if (tokenQty > activeSellOrder.remainTokenAmount) {
+                tokenQty = activeSellOrder.remainTokenAmount;
+                usdcShare = (tokenQty * currentPrice) / 10 ** TOEKN_DECIMALS;
             }
 
             (uint256 realAmount, uint256 feeAmount) = getAmountDeductFee(
                 usdcShare,
                 OrderType.SELL
             );
-            usdc.safeTransfer(sellOrder.trader, realAmount);
+            usdc.safeTransfer(activeSellOrder.trader, realAmount);
             usdc.safeTransfer(treasury, feeAmount);
 
-            sellOrder.remainTokenAmount -= tokenQty;
-            sellOrder.lastTradeTimestamp = block.timestamp;
+            activeSellOrder.remainTokenAmount -= tokenQty;
+            activeSellOrder.lastTradeTimestamp = block.timestamp;
 
-            if (sellOrder.remainTokenAmount == 0) {
-                sellOrder.isFilled = true;
+            if (activeSellOrder.remainTokenAmount == 0) {
+                activeSellOrder.isFilled = true;
             }
 
             tokenFilled += tokenQty;
@@ -269,7 +269,7 @@ contract MaisonEnergyOrderBook is
             orderMetadata.orderType == OrderType.SELL,
             "Should be Sell Order"
         );
-        require(tokenAmount > 0, "Invalid Token Amount");
+        require(tokenAmount > 0, "No Token Amount");
 
         maisonEnergyToken.safeTransferFrom(
             msg.sender,
@@ -311,14 +311,14 @@ contract MaisonEnergyOrderBook is
         // If there are no active buy orders, send tokens to insurance address
         if (activeBuyOrders.length == 0) {
             maisonEnergyToken.safeTransferFrom(
-                msg.sender,
+                sellMarketOrder.trader,
                 insuranceAddress,
                 tokenId,
                 tokenAmount,
                 ""
             );
             emit NoLiquiditySellOrderCreated(
-                msg.sender,
+                sellMarketOrder.trader,
                 tokenAmount,
                 block.timestamp
             );
@@ -390,8 +390,8 @@ contract MaisonEnergyOrderBook is
             );
         }
 
-        fullfilledOrderIds.push(sellMarketOrder.id);
-        cleanLimitOrders(sellMarketOrder.orderMetadata);
+        fulfilledOrderIds.push(sellMarketOrder.id);
+        cleanLimitOrders(buyMetadata);
 
         // Transfer USDC to seller
         (uint256 realAmount, uint256 feeAmount) = getAmountDeductFee(
@@ -437,10 +437,10 @@ contract MaisonEnergyOrderBook is
                 share = activeBuyOrder.remainTokenAmount;
             }
 
-            uint256 usdcAmount = (share * currentPrice) / 10 ** price_decimals;
+            uint256 usdcAmount = (share * currentPrice) / 10 ** TOEKN_DECIMALS;
             if (usdcAmount > activeBuyOrder.remainUsdcAmount) {
                 usdcAmount = activeBuyOrder.remainUsdcAmount;
-                share = (usdcAmount * 10 ** price_decimals) / currentPrice;
+                share = (usdcAmount * 10 ** TOEKN_DECIMALS) / currentPrice;
             }
 
             (uint256 realAmount, uint256 feeAmount) = getAmountDeductFee(
@@ -480,7 +480,6 @@ contract MaisonEnergyOrderBook is
      * @dev Create new limit order
      */
     function createLimitOrder(
-        uint256 usdcAmount, // For Buy
         uint256 desiredPrice,
         uint256 tokenAmount,
         uint256 validTo,
@@ -489,7 +488,9 @@ contract MaisonEnergyOrderBook is
     ) external {
         require(validTo > block.timestamp, "Invalid time limit");
 
+        uint256 usdcAmount;
         if (orderMetadata.orderType == OrderType.BUY) {
+            usdcAmount = (desiredPrice * tokenAmount) / 10 ** TOEKN_DECIMALS;
             usdc.safeTransferFrom(
                 msg.sender,
                 address(this),
@@ -528,14 +529,20 @@ contract MaisonEnergyOrderBook is
 
         uint256 nowTime = block.timestamp;
 
+        OrderMetadata memory buyMetadata = OrderMetadata({
+            orderType: OrderType.BUY,
+            zone: orderMetadata.zone,
+            physicalDelivery: orderMetadata.physicalDelivery
+        });
+
+        OrderMetadata memory sellMetadata = OrderMetadata({
+            orderType: OrderType.SELL,
+            zone: orderMetadata.zone,
+            physicalDelivery: orderMetadata.physicalDelivery
+        });
+
         // Try to match with opposite orders at the same or better price
         if (orderMetadata.orderType == OrderType.BUY) {
-            OrderMetadata memory sellMetadata = OrderMetadata({
-                orderType: OrderType.SELL,
-                zone: orderMetadata.zone,
-                physicalDelivery: orderMetadata.physicalDelivery
-            });
-
             Order[] memory activeSellOrders = getActiveOrders(sellMetadata);
 
             // match with lowest priced sells ≤ desiredPrice
@@ -616,18 +623,13 @@ contract MaisonEnergyOrderBook is
             // If partially filled, insert the rest
             if (newOrder.remainTokenAmount > 0) {
                 insertLimitOrder(newOrder.id);
+                ordersById[nonce] = newOrder;
             } else {
                 newOrder.isFilled = true;
                 ordersById[nonce] = newOrder;
-                fullfilledOrderIds.push(newOrder.id);
+                fulfilledOrderIds.push(nonce);
             }
         } else {
-            OrderMetadata memory buyMetadata = OrderMetadata({
-                orderType: OrderType.SELL,
-                zone: orderMetadata.zone,
-                physicalDelivery: orderMetadata.physicalDelivery
-            });
-
             Order[] memory activeBuyOrders = getActiveOrders(buyMetadata);
 
             // SELL order — match with highest priced buys ≥ desiredPrice
@@ -667,7 +669,7 @@ contract MaisonEnergyOrderBook is
                 // Time-weighted distribution
                 (
                     uint256 usdcFilled,
-                    uint256 tokenAmountFilled
+                    uint256 tokenAmountUsed
                 ) = distributeSellOrderAcrossPriceLevel(
                         newOrder,
                         currentPrice,
@@ -697,7 +699,7 @@ contract MaisonEnergyOrderBook is
                     ""
                 );
 
-                newOrder.remainTokenAmount -= tokenAmountFilled;
+                newOrder.remainTokenAmount -= tokenAmountUsed;
 
                 i = j;
             }
@@ -705,14 +707,16 @@ contract MaisonEnergyOrderBook is
             // If partially filled, insert the rest
             if (newOrder.remainTokenAmount > 0) {
                 insertLimitOrder(newOrder.id);
+                ordersById[nonce] = newOrder;
             } else {
                 newOrder.isFilled = true;
                 ordersById[nonce] = newOrder;
-                fullfilledOrderIds.push(newOrder.id);
+                fulfilledOrderIds.push(newOrder.id);
             }
         }
 
-        cleanLimitOrders(newOrder.orderMetadata);
+        cleanLimitOrders(buyMetadata);
+        cleanLimitOrders(sellMetadata);
 
         nonce++;
     }
@@ -730,7 +734,7 @@ contract MaisonEnergyOrderBook is
                 }
                 writeIndex++;
             } else {
-                fullfilledOrderIds.push(orderIds[readIndex]);
+                fulfilledOrderIds.push(orderIds[readIndex]);
             }
         }
 
@@ -746,33 +750,38 @@ contract MaisonEnergyOrderBook is
             order.orderMetadata.orderType
         ][order.orderMetadata.zone][order.orderMetadata.physicalDelivery];
 
-        // Insert orderId at the end
-        orderIds.push(orderId);
-
-        uint256 i = orderIds.length;
+        // Find the correct position to insert
+        uint256 insertPosition = orderIds.length;
 
         if (order.orderMetadata.orderType == OrderType.BUY) {
-            // Sort orders in ascending order (lower price first)
-            while (
-                i > 1 &&
-                ordersById[orderIds[i - 1]].desiredPrice > order.desiredPrice
-            ) {
-                orderIds[i] = orderIds[i - 1];
-                i--;
+            // For buy orders, find position where price is higher
+            for (uint256 i = 0; i < orderIds.length; i++) {
+                if (ordersById[orderIds[i]].desiredPrice > order.desiredPrice) {
+                    insertPosition = i;
+                    break;
+                }
             }
         } else {
-            // Sort orders in descending order (higher price first)
-            while (
-                i > 1 &&
-                ordersById[orderIds[i - 1]].desiredPrice < order.desiredPrice
-            ) {
-                orderIds[i] = orderIds[i - 1];
-                i--;
+            // For sell orders, find position where price is lower
+            for (uint256 i = 0; i < orderIds.length; i++) {
+                if (ordersById[orderIds[i]].desiredPrice < order.desiredPrice) {
+                    insertPosition = i;
+                    break;
+                }
             }
         }
 
-        // Place the new order in the correct position
-        orderIds[i] = orderId;
+        // Insert at the found position
+        if (insertPosition == orderIds.length) {
+            orderIds.push(orderId);
+        } else {
+            // Shift elements to make room
+            orderIds.push(orderIds[orderIds.length - 1]);
+            for (uint256 i = orderIds.length - 1; i > insertPosition; i--) {
+                orderIds[i] = orderIds[i - 1];
+            }
+            orderIds[insertPosition] = orderId;
+        }
     }
 
     function isInvalidOrder(uint256 orderId) internal view returns (bool) {
@@ -827,10 +836,6 @@ contract MaisonEnergyOrderBook is
     function cancelOrder(uint256 orderId) external onlyOrderMaker(orderId) {
         Order storage order = ordersById[orderId];
 
-        require(
-            order.tokenAmount > 0 && order.usdcAmount > 0,
-            "Not a limit order"
-        );
         require(!order.isCanceled, "Already canceled");
         require(!order.isFilled, "Order already filled");
 

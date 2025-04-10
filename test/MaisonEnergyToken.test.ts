@@ -722,4 +722,219 @@ describe("MaisonEnergyToken", function () {
                 .to.be.revertedWith("Token already expired");
         });
     });
+
+    describe("Representative Metrics", function () {
+        it("Should return correct metrics for representative with no tokens", async function () {
+            const [
+                totalRedeemed,
+                totalAllocated,
+                tokensExpiringIn1,
+                tokensExpiringIn2,
+                tokensExpiringIn3,
+                tokensExpiringIn4,
+                tokensExpiringIn5,
+                tokensExpiringIn6,
+                tokensExpiringIn12,
+                tokensExpiringIn24,
+                tokensExpiringIn36
+            ] = await maisonEnergyToken.getRepMetrics(user1.address);
+
+            expect(totalRedeemed).to.equal(0);
+            expect(totalAllocated).to.equal(0);
+            expect(tokensExpiringIn1).to.equal(0);
+            expect(tokensExpiringIn2).to.equal(0);
+            expect(tokensExpiringIn3).to.equal(0);
+            expect(tokensExpiringIn4).to.equal(0);
+            expect(tokensExpiringIn5).to.equal(0);
+            expect(tokensExpiringIn6).to.equal(0);
+            expect(tokensExpiringIn12).to.equal(0);
+            expect(tokensExpiringIn24).to.equal(0);
+            expect(tokensExpiringIn36).to.equal(0);
+        });
+
+        it("Should return correct metrics for representative with tokens in different expiration periods", async function () {
+            // Mint tokens with different expiration periods
+            const amount = ethers.parseUnits("1000", 18);
+            const embeddedValue = ethers.parseUnits("50", 18);
+            const currentTime = await time.latest();
+
+            // Token expiring in 1 month
+            await ercotPriceOracle.updatePrice(
+                ZoneType.LZ_HOUSTON,
+                PhysicalDeliveryType.On_Peak,
+                ethers.parseUnits("100", 18)
+            );
+
+            await maisonEnergyToken.connect(issuer).mint(
+                amount,
+                embeddedValue,
+                currentTime + 3600,
+                currentTime + 30 * 86400, // 30 days
+                "ERCOT123",
+                {
+                    zone: ZoneType.LZ_HOUSTON,
+                    physicalDelivery: PhysicalDeliveryType.On_Peak,
+                    physicalDeliveryHours: 24,
+                    physicalDeliveryDays: PhysicalDeliveryDays.Mon,
+                    fuelType: FuelType.NaturalGas
+                }
+            );
+
+            // Token expiring in 3 months
+            await maisonEnergyToken.connect(issuer).mint(
+                amount,
+                embeddedValue,
+                currentTime + 3600,
+                currentTime + 90 * 86400, // 90 days
+                "ERCOT124",
+                {
+                    zone: ZoneType.LZ_HOUSTON,
+                    physicalDelivery: PhysicalDeliveryType.On_Peak,
+                    physicalDeliveryHours: 24,
+                    physicalDeliveryDays: PhysicalDeliveryDays.Mon,
+                    fuelType: FuelType.NaturalGas
+                }
+            );
+
+            // Token expiring in 12 months
+            await maisonEnergyToken.connect(issuer).mint(
+                amount,
+                embeddedValue,
+                currentTime + 3600,
+                currentTime + 365 * 86400, // 365 days
+                "ERCOT125",
+                {
+                    zone: ZoneType.LZ_HOUSTON,
+                    physicalDelivery: PhysicalDeliveryType.On_Peak,
+                    physicalDeliveryHours: 24,
+                    physicalDeliveryDays: PhysicalDeliveryDays.Mon,
+                    fuelType: FuelType.NaturalGas
+                }
+            );
+
+            // Transfer tokens to user1
+            await maisonEnergyToken.connect(issuer).safeTransferFrom(
+                issuer.address,
+                user1.address,
+                0, // First token (1 month)
+                amount,
+                "0x"
+            );
+
+            await maisonEnergyToken.connect(issuer).safeTransferFrom(
+                issuer.address,
+                user1.address,
+                1, // Second token (3 months)
+                amount,
+                "0x"
+            );
+
+            await maisonEnergyToken.connect(issuer).safeTransferFrom(
+                issuer.address,
+                user1.address,
+                2, // Third token (12 months)
+                amount,
+                "0x"
+            );
+
+            // Fast forward time to after tokens become valid but before they expire
+            await time.increaseTo(currentTime + 3600 + 1);
+
+            const [
+                totalRedeemed,
+                totalAllocated,
+                tokensExpiringIn1,
+                tokensExpiringIn2,
+                tokensExpiringIn3,
+                tokensExpiringIn4,
+                tokensExpiringIn5,
+                tokensExpiringIn6,
+                tokensExpiringIn12,
+                tokensExpiringIn24,
+                tokensExpiringIn36
+            ] = await maisonEnergyToken.getRepMetrics(user1.address);
+
+            expect(totalRedeemed).to.equal(0);
+            expect(totalAllocated).to.equal(amount * 3n);
+            expect(tokensExpiringIn1).to.equal(amount);
+            expect(tokensExpiringIn2).to.equal(0);
+            expect(tokensExpiringIn3).to.equal(amount);
+            expect(tokensExpiringIn4).to.equal(0);
+            expect(tokensExpiringIn5).to.equal(0);
+            expect(tokensExpiringIn6).to.equal(0);
+            expect(tokensExpiringIn12).to.equal(amount);
+            expect(tokensExpiringIn24).to.equal(0);
+            expect(tokensExpiringIn36).to.equal(0);
+        });
+
+        it("Should return correct metrics after token redemption", async function () {
+            // Mint a token
+            const amount = ethers.parseUnits("1000", 18);
+            const embeddedValue = ethers.parseUnits("50", 18);
+            const currentTime = await time.latest();
+
+            await ercotPriceOracle.updatePrice(
+                ZoneType.LZ_HOUSTON,
+                PhysicalDeliveryType.On_Peak,
+                ethers.parseUnits("100", 18)
+            );
+
+            await maisonEnergyToken.connect(issuer).mint(
+                amount,
+                embeddedValue,
+                currentTime + 3600,
+                currentTime + 30 * 86400,
+                "ERCOT123",
+                {
+                    zone: ZoneType.LZ_HOUSTON,
+                    physicalDelivery: PhysicalDeliveryType.On_Peak,
+                    physicalDeliveryHours: 24,
+                    physicalDeliveryDays: PhysicalDeliveryDays.Mon,
+                    fuelType: FuelType.NaturalGas
+                }
+            );
+
+            // Transfer token to user1
+            await maisonEnergyToken.connect(issuer).safeTransferFrom(
+                issuer.address,
+                user1.address,
+                0,
+                amount,
+                "0x"
+            );
+
+            // Fast forward time to after token becomes valid but before it expires
+            await time.increaseTo(currentTime + 3600 + 1);
+
+            // Redeem half of the tokens
+            const redeemAmount = amount / 2n;
+            await maisonEnergyToken.connect(user1).redeem(0, redeemAmount);
+
+            const [
+                totalRedeemed,
+                totalAllocated,
+                tokensExpiringIn1,
+                tokensExpiringIn2,
+                tokensExpiringIn3,
+                tokensExpiringIn4,
+                tokensExpiringIn5,
+                tokensExpiringIn6,
+                tokensExpiringIn12,
+                tokensExpiringIn24,
+                tokensExpiringIn36
+            ] = await maisonEnergyToken.getRepMetrics(user1.address);
+
+            expect(totalRedeemed).to.equal(redeemAmount);
+            expect(totalAllocated).to.equal(amount - redeemAmount);
+            expect(tokensExpiringIn1).to.equal(amount - redeemAmount);
+            expect(tokensExpiringIn2).to.equal(0);
+            expect(tokensExpiringIn3).to.equal(0);
+            expect(tokensExpiringIn4).to.equal(0);
+            expect(tokensExpiringIn5).to.equal(0);
+            expect(tokensExpiringIn6).to.equal(0);
+            expect(tokensExpiringIn12).to.equal(0);
+            expect(tokensExpiringIn24).to.equal(0);
+            expect(tokensExpiringIn36).to.equal(0);
+        });
+    });
 }); 

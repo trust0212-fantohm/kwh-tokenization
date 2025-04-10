@@ -477,30 +477,31 @@ contract MaisonEnergyToken is
         totalRedeemed = redeemedTokensForUser[repAddress];
 
         for (uint256 id = 0; id < NumKindsOfToken; id++) {
-            totalAllocated += balanceOf(repAddress, id);
+            uint256 balance = balanceOf(repAddress, id);
+            totalAllocated += balance;
             TokenDetail memory token = tokenDetails[id];
 
-            if (
-                block.timestamp > token.validTo &&
-                block.timestamp < token.validTo + 30 days
-            ) {
-                tokensExpiringIn1 = balanceOf(repAddress, id);
-            } else if (block.timestamp < token.validTo + 60 days) {
-                tokensExpiringIn2 = balanceOf(repAddress, id);
-            } else if (block.timestamp < token.validTo + 90 days) {
-                tokensExpiringIn3 = balanceOf(repAddress, id);
-            } else if (block.timestamp < token.validTo + 120 days) {
-                tokensExpiringIn4 = balanceOf(repAddress, id);
-            } else if (block.timestamp < token.validTo + 150 days) {
-                tokensExpiringIn5 = balanceOf(repAddress, id);
-            } else if (block.timestamp < token.validTo + 180 days) {
-                tokensExpiringIn6 = balanceOf(repAddress, id);
-            } else if (block.timestamp < token.validTo + 365 days) {
-                tokensExpiringIn12 = balanceOf(repAddress, id);
-            } else if (block.timestamp < token.validTo + 730 days) {
-                tokensExpiringIn24 = balanceOf(repAddress, id);
-            } else if (block.timestamp < token.validTo + 1095 days) {
-                tokensExpiringIn36 = balanceOf(repAddress, id);
+            if (!token.isExpired) {
+                uint256 timeToExpiry = token.validTo - block.timestamp;
+                if (timeToExpiry <= 30 days) {
+                    tokensExpiringIn1 = balance;
+                } else if (timeToExpiry <= 60 days) {
+                    tokensExpiringIn2 = balance;
+                } else if (timeToExpiry <= 90 days) {
+                    tokensExpiringIn3 = balance;
+                } else if (timeToExpiry <= 120 days) {
+                    tokensExpiringIn4 = balance;
+                } else if (timeToExpiry <= 150 days) {
+                    tokensExpiringIn5 = balance;
+                } else if (timeToExpiry <= 180 days) {
+                    tokensExpiringIn6 = balance;
+                } else if (timeToExpiry <= 365 days) {
+                    tokensExpiringIn12 = balance;
+                } else if (timeToExpiry <= 730 days) {
+                    tokensExpiringIn24 = balance;
+                } else if (timeToExpiry <= 1095 days) {
+                    tokensExpiringIn36 = balance;
+                }
             }
         }
     }
