@@ -291,6 +291,7 @@ describe("MaisonEnergyToken", function () {
             // Check if upkeep is needed
             const [upkeepNeeded, performData] = await maisonEnergyToken.checkUpkeep("0x");
             expect(upkeepNeeded).to.be.true;
+            expect(ethers.AbiCoder.defaultAbiCoder().decode(['uint256'], performData)[0]).to.equal(tokenId);
 
             // Perform upkeep
             await maisonEnergyToken.performUpkeep(performData);
@@ -437,6 +438,288 @@ describe("MaisonEnergyToken", function () {
             const metrics = await maisonEnergyToken.getIssuerMetrics(issuer.address);
             expect(metrics.totalKwhMinted).to.equal(amount);
             expect(metrics.totalActiveTokens).to.equal(amount);
+        });
+    });
+
+    describe("Manual Settlement", function () {
+        it("Should allow issuer to manually settle debts for expired tokens", async function () {
+            // First mint some tokens
+            const amount = ethers.parseUnits("1000", 18);
+            const embeddedValue = ethers.parseUnits("50", 18);
+            const validFrom = (await time.latest()) + 3600;
+            const validTo = validFrom + 86400 * 30;
+
+            await ercotPriceOracle.updatePrice(
+                ZoneType.LZ_HOUSTON,
+                PhysicalDeliveryType.On_Peak,
+                ethers.parseUnits("100", 18)
+            );
+
+            await maisonEnergyToken.connect(issuer).mint(
+                amount,
+                embeddedValue,
+                validFrom,
+                validTo,
+                "ERCOT123",
+                {
+                    zone: ZoneType.LZ_HOUSTON,
+                    physicalDelivery: PhysicalDeliveryType.On_Peak,
+                    physicalDeliveryHours: 24,
+                    physicalDeliveryDays: PhysicalDeliveryDays.Mon,
+                    fuelType: FuelType.NaturalGas
+                }
+            );
+
+            const tokenId = 0;
+            const redeemAmount = ethers.parseUnits("500", 18);
+
+            // Transfer tokens to users
+            await maisonEnergyToken.connect(issuer).safeTransferFrom(
+                issuer.address,
+                user1.address,
+                tokenId,
+                redeemAmount,
+                "0x"
+            );
+            await maisonEnergyToken.connect(issuer).safeTransferFrom(
+                issuer.address,
+                user2.address,
+                tokenId,
+                redeemAmount,
+                "0x"
+            );
+
+            // Fast forward time to expiration
+            await time.increaseTo(validTo + 86400);
+
+            // Perform upkeep to expire token
+            const [upkeepNeeded, performData] = await maisonEnergyToken.checkUpkeep("0x");
+            await maisonEnergyToken.performUpkeep(performData);
+
+            // Calculate settlement amounts
+            const settlementAmount = ethers.parseUnits("50", 6); // 50 USDC per token
+
+            // Approve USDC for settlement
+            await mockUSDC.connect(issuer).approve(await maisonEnergyToken.getAddress(), settlementAmount * 2n);
+
+            // Manual settlement
+            await expect(
+                maisonEnergyToken.connect(issuer).manualSettle(
+                    tokenId,
+                    [user1.address, user2.address],
+                    [settlementAmount, settlementAmount]
+                )
+            ).to.not.be.reverted;
+
+            // Verify balances after settlement
+            expect(await mockUSDC.balanceOf(user1.address)).to.equal(ethers.parseUnits("1000000", 6) + settlementAmount);
+            expect(await mockUSDC.balanceOf(user2.address)).to.equal(ethers.parseUnits("1000000", 6) + settlementAmount);
+        });
+
+        it("Should not allow non-issuer to manually settle debts", async function () {
+            // First mint a token to have a valid token ID
+            const amount = ethers.parseUnits("1000", 18);
+            const embeddedValue = ethers.parseUnits("50", 18);
+            const validFrom = (await time.latest()) + 3600;
+            const validTo = validFrom + 86400 * 30;
+
+            await ercotPriceOracle.updatePrice(
+                ZoneType.LZ_HOUSTON,
+                PhysicalDeliveryType.On_Peak,
+                ethers.parseUnits("100", 18)
+            );
+
+            await maisonEnergyToken.connect(issuer).mint(
+                amount,
+                embeddedValue,
+                validFrom,
+                validTo,
+                "ERCOT123",
+                {
+                    zone: ZoneType.LZ_HOUSTON,
+                    physicalDelivery: PhysicalDeliveryType.On_Peak,
+                    physicalDeliveryHours: 24,
+                    physicalDeliveryDays: PhysicalDeliveryDays.Mon,
+                    fuelType: FuelType.NaturalGas
+                }
+            );
+
+            const tokenId = 0;
+
+            // Fast forward time to expiration
+            await time.increaseTo(validTo + 86400);
+
+            // Perform upkeep to expire token
+            const [upkeepNeeded, performData] = await maisonEnergyToken.checkUpkeep("0x");
+            await maisonEnergyToken.performUpkeep(performData);
+
+            const settlementAmount = ethers.parseUnits("50", 6);
+
+            await expect(
+                maisonEnergyToken.connect(user1).manualSettle(
+                    tokenId,
+                    [user1.address],
+                    [settlementAmount]
+                )
+            ).to.be.revertedWith("You are not an issuer of this token");
+        });
+    });
+
+    describe("Chainlink Automation", function () {
+        it("Should correctly check for tokens needing expiration", async function () {
+            // First mint some tokens
+            const amount = ethers.parseUnits("1000", 18);
+            const embeddedValue = ethers.parseUnits("50", 18);
+            const validFrom = (await time.latest()) + 3600;
+            const validTo = validFrom + 86400 * 30;
+
+            await ercotPriceOracle.updatePrice(
+                ZoneType.LZ_HOUSTON,
+                PhysicalDeliveryType.On_Peak,
+                ethers.parseUnits("100", 18)
+            );
+
+            await maisonEnergyToken.connect(issuer).mint(
+                amount,
+                embeddedValue,
+                validFrom,
+                validTo,
+                "ERCOT123",
+                {
+                    zone: ZoneType.LZ_HOUSTON,
+                    physicalDelivery: PhysicalDeliveryType.On_Peak,
+                    physicalDeliveryHours: 24,
+                    physicalDeliveryDays: PhysicalDeliveryDays.Mon,
+                    fuelType: FuelType.NaturalGas
+                }
+            );
+
+            const tokenId = 0;
+
+            // Fast forward time to just before expiration (1 day before)
+            await time.increaseTo(validTo - 86400);
+
+            // Check if upkeep is needed
+            const [upkeepNeeded, performData] = await maisonEnergyToken.checkUpkeep("0x");
+            expect(upkeepNeeded).to.be.true;
+        });
+
+        it("Should not need upkeep when no tokens are expiring", async function () {
+            // First mint some tokens
+            const amount = ethers.parseUnits("1000", 18);
+            const embeddedValue = ethers.parseUnits("50", 18);
+            const validFrom = (await time.latest()) + 3600;
+            const validTo = validFrom + 86400 * 30;
+
+            await ercotPriceOracle.updatePrice(
+                ZoneType.LZ_HOUSTON,
+                PhysicalDeliveryType.On_Peak,
+                ethers.parseUnits("100", 18)
+            );
+
+            await maisonEnergyToken.connect(issuer).mint(
+                amount,
+                embeddedValue,
+                validFrom,
+                validTo,
+                "ERCOT123",
+                {
+                    zone: ZoneType.LZ_HOUSTON,
+                    physicalDelivery: PhysicalDeliveryType.On_Peak,
+                    physicalDeliveryHours: 24,
+                    physicalDeliveryDays: PhysicalDeliveryDays.Mon,
+                    fuelType: FuelType.NaturalGas
+                }
+            );
+
+            // Check if upkeep is needed (should be false as token is not expiring soon)
+            const [upkeepNeeded, performData] = await maisonEnergyToken.checkUpkeep("0x");
+            expect(upkeepNeeded).to.be.false;
+            expect(performData).to.equal("0x");
+        });
+
+        it("Should perform upkeep to expire tokens", async function () {
+            // First mint some tokens
+            const amount = ethers.parseUnits("1000", 18);
+            const embeddedValue = ethers.parseUnits("50", 18);
+            const validFrom = (await time.latest()) + 3600;
+            const validTo = validFrom + 86400 * 30;
+
+            await ercotPriceOracle.updatePrice(
+                ZoneType.LZ_HOUSTON,
+                PhysicalDeliveryType.On_Peak,
+                ethers.parseUnits("100", 18)
+            );
+
+            await maisonEnergyToken.connect(issuer).mint(
+                amount,
+                embeddedValue,
+                validFrom,
+                validTo,
+                "ERCOT123",
+                {
+                    zone: ZoneType.LZ_HOUSTON,
+                    physicalDelivery: PhysicalDeliveryType.On_Peak,
+                    physicalDeliveryHours: 24,
+                    physicalDeliveryDays: PhysicalDeliveryDays.Mon,
+                    fuelType: FuelType.NaturalGas
+                }
+            );
+
+            const tokenId = 0;
+
+            // Fast forward time to just before expiration
+            await time.increaseTo(validTo - 86400);
+
+            // Perform upkeep
+            const [upkeepNeeded, performData] = await maisonEnergyToken.checkUpkeep("0x");
+            await maisonEnergyToken.performUpkeep(performData);
+
+            // Verify token is expired
+            const tokenDetail = await maisonEnergyToken.tokenDetails(tokenId);
+            expect(tokenDetail.isExpired).to.be.true;
+        });
+
+        it("Should not perform upkeep for already expired tokens", async function () {
+            // First mint some tokens
+            const amount = ethers.parseUnits("1000", 18);
+            const embeddedValue = ethers.parseUnits("50", 18);
+            const validFrom = (await time.latest()) + 3600;
+            const validTo = validFrom + 86400 * 30;
+
+            await ercotPriceOracle.updatePrice(
+                ZoneType.LZ_HOUSTON,
+                PhysicalDeliveryType.On_Peak,
+                ethers.parseUnits("100", 18)
+            );
+
+            await maisonEnergyToken.connect(issuer).mint(
+                amount,
+                embeddedValue,
+                validFrom,
+                validTo,
+                "ERCOT123",
+                {
+                    zone: ZoneType.LZ_HOUSTON,
+                    physicalDelivery: PhysicalDeliveryType.On_Peak,
+                    physicalDeliveryHours: 24,
+                    physicalDeliveryDays: PhysicalDeliveryDays.Mon,
+                    fuelType: FuelType.NaturalGas
+                }
+            );
+
+            const tokenId = 0;
+
+            // Fast forward time to just before expiration
+            await time.increaseTo(validTo - 86400);
+
+            // Perform upkeep first time
+            const [upkeepNeeded, performData] = await maisonEnergyToken.checkUpkeep("0x");
+            await maisonEnergyToken.performUpkeep(performData);
+
+            // Try to perform upkeep again
+            await expect(maisonEnergyToken.performUpkeep(performData))
+                .to.be.revertedWith("Token already expired");
         });
     });
 }); 
