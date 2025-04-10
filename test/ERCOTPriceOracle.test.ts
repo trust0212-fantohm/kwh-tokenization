@@ -65,6 +65,9 @@ describe("ERCOTPriceOracle", function () {
             // Verify the price was updated
             const [storedPrice, timestamp] = await ercotPriceOracle.historicalPrice(zone, physicalDelivery, block.timestamp);
             expect(storedPrice).to.equal(price);
+
+            // Verify latest timestamp was updated
+            expect(await ercotPriceOracle.getLatestTimestamp(zone, physicalDelivery)).to.equal(block.timestamp);
         });
 
         it("Should emit PriceUpdated event when price is updated", async function () {
@@ -98,6 +101,17 @@ describe("ERCOTPriceOracle", function () {
                 price
             )).to.be.revertedWithCustomError(ercotPriceOracle, "AccessControlUnauthorizedAccount");
         });
+
+        it("Should not allow zero price updates", async function () {
+            const zone = ZoneType.LZ_HOUSTON;
+            const physicalDelivery = PhysicalDeliveryType.On_Peak;
+
+            await expect(ercotPriceOracle.connect(writer).updatePrice(
+                zone,
+                physicalDelivery,
+                0
+            )).to.be.revertedWithCustomError(ercotPriceOracle, "ZeroPriceNotAllowed");
+        });
     });
 
     describe("Price Queries", function () {
@@ -126,9 +140,18 @@ describe("ERCOTPriceOracle", function () {
             const physicalDelivery = PhysicalDeliveryType.On_Peak;
             const expectedPrice = ethers.parseUnits("100", 18);
 
-            const [price, timestamp] = await ercotPriceOracle.historicalPrice(zone, physicalDelivery, priceTimestamp);
+            const [price, timestamp] = await ercotPriceOracle.getRealTimePrice(zone, physicalDelivery);
             expect(price).to.equal(expectedPrice);
             expect(timestamp).to.equal(priceTimestamp);
+        });
+
+        it("Should return zero for real-time price when no price exists", async function () {
+            const zone = ZoneType.LZ_WEST; // Zone with no price set
+            const physicalDelivery = PhysicalDeliveryType.On_Peak;
+
+            const [price, timestamp] = await ercotPriceOracle.getRealTimePrice(zone, physicalDelivery);
+            expect(price).to.equal(0);
+            expect(timestamp).to.equal(0);
         });
 
         it("Should return correct historical price", async function () {
@@ -157,6 +180,31 @@ describe("ERCOTPriceOracle", function () {
             );
             expect(price).to.equal(0);
             expect(returnedTimestamp).to.equal(futureTimestamp);
+        });
+
+        it("Should correctly track latest timestamp", async function () {
+            const zone = ZoneType.LZ_HOUSTON;
+            const physicalDelivery = PhysicalDeliveryType.On_Peak;
+            
+            // Update price multiple times
+            for (let i = 0; i < 3; i++) {
+                const price = ethers.parseUnits((100 + i).toString(), 18);
+                const tx = await ercotPriceOracle.connect(writer).updatePrice(zone, physicalDelivery, price);
+                const receipt = await tx.wait();
+                if (!receipt) throw new Error("Transaction receipt not found");
+                const block = await ethers.provider.getBlock(receipt.blockNumber);
+                if (!block) throw new Error("Block not found");
+                
+                // Verify latest timestamp is updated
+                expect(await ercotPriceOracle.getLatestTimestamp(zone, physicalDelivery)).to.equal(block.timestamp);
+                
+                // Verify getRealTimePrice returns the latest price
+                const [latestPrice, latestTimestamp] = await ercotPriceOracle.getRealTimePrice(zone, physicalDelivery);
+                expect(latestPrice).to.equal(price);
+                expect(latestTimestamp).to.equal(block.timestamp);
+                
+                await time.increase(1); // Increase time by 1 second
+            }
         });
     });
 
@@ -191,11 +239,20 @@ describe("ERCOTPriceOracle", function () {
                     const block = await ethers.provider.getBlock(receipt.blockNumber);
                     if (!block) throw new Error("Block not found");
                     timestamps[zone][delivery] = block.timestamp;
-                    await time.increase(1); // Increase time by 1 second to ensure different timestamps
+
+                    // Verify latest timestamp is updated
+                    expect(await ercotPriceOracle.getLatestTimestamp(zone, delivery)).to.equal(block.timestamp);
+
+                    // Verify getRealTimePrice returns the correct price
+                    const [realTimePrice, realTimeTimestamp] = await ercotPriceOracle.getRealTimePrice(zone, delivery);
+                    expect(realTimePrice).to.equal(prices[zone][delivery]);
+                    expect(realTimeTimestamp).to.equal(block.timestamp);
+
+                    await time.increase(1); // Increase time by 1 second
                 }
             }
 
-            // Verify all prices are stored correctly
+            // Verify all historical prices are stored correctly
             for (const zone of [ZoneType.LZ_HOUSTON, ZoneType.LZ_NORTH]) {
                 for (const delivery of [PhysicalDeliveryType.On_Peak, PhysicalDeliveryType.Off_Peak]) {
                     const [price, timestamp] = await ercotPriceOracle.historicalPrice(zone, delivery, timestamps[zone][delivery]);

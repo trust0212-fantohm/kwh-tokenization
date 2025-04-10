@@ -14,7 +14,13 @@ contract ERCOTPriceOracle is IERCOTPriceOracle, AccessControlUpgradeable {
     mapping(CommonTypes.ZoneType => mapping(CommonTypes.PhysicalDeliveryType => mapping(uint256 => uint256)))
         private zonePrices;
 
+    // Mapping to store the latest timestamp for each zone and delivery type
+    mapping(CommonTypes.ZoneType => mapping(CommonTypes.PhysicalDeliveryType => uint256))
+        private latestTimestamp;
+
     bytes32 public constant WRITER_ROLE = keccak256("WRITER_ROLE");
+
+    error ZeroPriceNotAllowed();
 
     /**
      * @dev Constructor sets the contract deployer as the owner.
@@ -28,23 +34,27 @@ contract ERCOTPriceOracle is IERCOTPriceOracle, AccessControlUpgradeable {
 
     /**
      * @notice Fetches the latest price for a given ERCOT zone.
-     * @dev Retrieves the price stored for the current block timestamp.
+     * @dev Retrieves the most recent price stored for the zone and delivery type.
      * @param zone The ERCOT zone to get the real-time price for.
-     * @return The latest recorded price for the specified zone.
+     * @param physicalDelivery The physical delivery type to get the price for.
+     * @return The latest recorded price and its timestamp for the specified zone and delivery type.
      */
     function getRealTimePrice(
         CommonTypes.ZoneType zone,
         CommonTypes.PhysicalDeliveryType physicalDelivery
     ) external view returns (uint256, uint256) {
-        return (
-            zonePrices[zone][physicalDelivery][block.timestamp],
-            block.timestamp
-        );
+        uint256 timestamp = latestTimestamp[zone][physicalDelivery];
+        if (timestamp == 0) {
+            return (0, 0);
+        }
+        return (zonePrices[zone][physicalDelivery][timestamp], timestamp);
     }
 
     /**
      * @notice Fetches the historical price of a given zone at a specific timestamp.
+     * @dev If no price exists for the exact timestamp, returns 0.
      * @param zone The ERCOT zone to get the historical price for.
+     * @param physicalDelivery The physical delivery type to get the price for.
      * @param timestamp The specific timestamp to retrieve the price for.
      * @return The price recorded at the given timestamp and the timestamp itself.
      */
@@ -57,20 +67,38 @@ contract ERCOTPriceOracle is IERCOTPriceOracle, AccessControlUpgradeable {
     }
 
     /**
-     * @notice Updates the electricity price for a specific ERCOT zone at a given timestamp.
-     * @dev Only the contract owner can call this function to update the price.
+     * @notice Updates the electricity price for a specific ERCOT zone.
+     * @dev Only accounts with WRITER_ROLE can call this function.
      * @param zone The ERCOT zone where the price is being updated.
-     * @param price The new price to be recorded for the given zone and timestamp.
+     * @param physicalDelivery The physical delivery type for which the price is being updated.
+     * @param price The new price to be recorded.
      */
     function updatePrice(
         CommonTypes.ZoneType zone,
         CommonTypes.PhysicalDeliveryType physicalDelivery,
         uint256 price
     ) external onlyRole(WRITER_ROLE) {
-        // Store the price for the given zone and timestamp
-        zonePrices[zone][physicalDelivery][block.timestamp] = price;
+        if (price == 0) revert ZeroPriceNotAllowed();
+
+        // Store the price for the current timestamp
+        uint256 currentTimestamp = block.timestamp;
+        zonePrices[zone][physicalDelivery][currentTimestamp] = price;
+        latestTimestamp[zone][physicalDelivery] = currentTimestamp;
 
         // Emit an event for external tracking
-        emit PriceUpdated(zone, physicalDelivery, price, block.timestamp);
+        emit PriceUpdated(zone, physicalDelivery, price, currentTimestamp);
+    }
+
+    /**
+     * @notice Gets the latest timestamp for which a price was recorded.
+     * @param zone The ERCOT zone to query.
+     * @param physicalDelivery The physical delivery type to query.
+     * @return The latest timestamp for which a price exists.
+     */
+    function getLatestTimestamp(
+        CommonTypes.ZoneType zone,
+        CommonTypes.PhysicalDeliveryType physicalDelivery
+    ) external view returns (uint256) {
+        return latestTimestamp[zone][physicalDelivery];
     }
 }

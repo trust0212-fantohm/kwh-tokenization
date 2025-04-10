@@ -43,6 +43,17 @@ interface IERCOTPriceOracle {
         uint256 price
     ) external;
 
+    /**
+     * @notice Gets the latest timestamp for which a price was recorded.
+     * @param zone The ERCOT zone to query.
+     * @param physicalDelivery The physical delivery type to query.
+     * @return The latest timestamp for which a price exists.
+     */
+    function getLatestTimestamp(
+        CommonTypes.ZoneType zone,
+        CommonTypes.PhysicalDeliveryType physicalDelivery
+    ) external view returns (uint256);
+
     // Event emitted whenever a price is updated
     event PriceUpdated(
         CommonTypes.ZoneType indexed zone,
