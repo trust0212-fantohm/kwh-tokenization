@@ -1,10 +1,12 @@
 import { expect } from "chai";
-import { ethers } from "hardhat";
-import { MaisonEnergyOrderBook, MaisonEnergyToken, MockUSDC } from "../typechain-types";
+import { ethers, upgrades } from "hardhat";
+import { ERCOTPriceOracle, MaisonEnergyOrderBook, MaisonEnergyToken, MockUSDC } from "../typechain-types";
 import { time } from "@nomicfoundation/hardhat-network-helpers";
 import { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers";
 
 describe("MaisonEnergyOrderBook", function () {
+  const ISSUER_ROLE = ethers.keccak256(ethers.toUtf8Bytes("ISSUER_ROLE"));
+
   let orderBook: MaisonEnergyOrderBook;
   let token: MaisonEnergyToken;
   let usdc: MockUSDC;
@@ -14,8 +16,9 @@ describe("MaisonEnergyOrderBook", function () {
   let seller: SignerWithAddress;
   let treasury: SignerWithAddress;
   let insurance: SignerWithAddress;
+  let ercotPriceOracle: ERCOTPriceOracle;
 
-  const tokenId = 1;
+  const tokenId = 0;
   const USDC_DECIMALS = 6;
   const TOKEN_DECIMALS = 18;
 
@@ -52,27 +55,47 @@ describe("MaisonEnergyOrderBook", function () {
   beforeEach(async () => {
     [owner, buyer, seller, treasury, insurance] = await ethers.getSigners();
 
+    // Deploy MockUSDC
     const USDC = await ethers.getContractFactory("MockUSDC");
     usdc = await USDC.deploy();
     await usdc.waitForDeployment();
 
+    // Deploy ERCOTPriceOracle
+    const ERCOTPriceOracle = await ethers.getContractFactory("ERCOTPriceOracle");
+    ercotPriceOracle = await upgrades.deployProxy(ERCOTPriceOracle, [], {
+      initializer: "initialize",
+    });
+    await ercotPriceOracle.waitForDeployment();
+
+    // Deploy MaisonEnergyToken
     const Token = await ethers.getContractFactory("MaisonEnergyToken");
-    token = await Token.deploy();
+    token = await upgrades.deployProxy(
+      Token,
+      [await ercotPriceOracle.getAddress(), owner.address, await usdc.getAddress()],
+      {
+        initializer: "initialize",
+      }
+    );
     await token.waitForDeployment();
 
+    // Deploy MaisonEnergyOrderbook
     const OrderBook = await ethers.getContractFactory("MaisonEnergyOrderBook");
-    orderBook = await OrderBook.deploy();
-    await orderBook.initialize(
-      await treasury.getAddress(),
-      await insurance.getAddress(),
-      await usdc.getAddress(),
-      await token.getAddress()
+    orderBook = await upgrades.deployProxy(
+      OrderBook,
+      [treasury.address, insurance.address, await usdc.getAddress(), await token.getAddress()],
+      {
+        initializer: "initialize",
+      }
     );
+    await orderBook.waitForDeployment();
 
     const amount = ethers.parseUnits("1000", 18);
     const embeddedValue = ethers.parseUnits("50", 18);
     const validFrom = (await time.latest()) + 3600;
     const validTo = validFrom + 86400 * 30; // 30 days
+
+    // Grant roles
+    await token.grantRole(ISSUER_ROLE, seller.address);
 
     // Mint tokens
     await token.connect(seller).mint(
@@ -154,13 +177,15 @@ describe("MaisonEnergyOrderBook", function () {
   });
 
   it("should cancel a limit order and refund USDC", async () => {
-    const price = ethers.parseUnits("1", USDC_DECIMALS);
-    const tokenAmount = ethers.parseUnits("100", TOKEN_DECIMALS);
-    const usdcAmount = price * BigInt(100);
+    const price = ethers.parseUnits("1", USDC_DECIMALS); // 1 USDC per token
+    const tokenAmount = ethers.parseUnits("100", TOKEN_DECIMALS); // 100 tokens
+
     const validTo = Math.floor(Date.now() / 1000) + 3600;
 
-    await usdc.mint(await buyer.getAddress(), usdcAmount);
-    await usdc.connect(buyer).approve(orderBook.getAddress(), usdcAmount);
+    const totalUSDC = ethers.parseUnits("100", USDC_DECIMALS);
+
+    await usdc.mint(buyer.address, totalUSDC);
+    await usdc.connect(buyer).approve(orderBook.getAddress(), totalUSDC);
 
     await orderBook.connect(buyer).createLimitOrder(
       price,
@@ -170,9 +195,9 @@ describe("MaisonEnergyOrderBook", function () {
       getOrderMetadata(0) // BUY
     );
 
-    const balanceBefore = await usdc.balanceOf(await buyer.getAddress());
+    const balanceBefore = await usdc.balanceOf(buyer.address);
     await orderBook.connect(buyer).cancelOrder(0);
-    const balanceAfter = await usdc.balanceOf(await buyer.getAddress());
+    const balanceAfter = await usdc.balanceOf(buyer.address);
 
     expect(balanceAfter > balanceBefore).to.be.true;
   });
@@ -200,7 +225,7 @@ describe("MaisonEnergyOrderBook", function () {
   it("should detect expired orders via checkUpkeep", async () => {
     const price = ethers.parseUnits("1", USDC_DECIMALS);
     const tokenAmount = ethers.parseUnits("100", TOKEN_DECIMALS);
-    const validTo = Math.floor(Date.now() / 1000) - 10; // already expired
+    const validTo = (await time.latest()) + 5;
 
     await token.connect(seller).setApprovalForAll(orderBook.getAddress(), true);
     await orderBook.connect(seller).createLimitOrder(
@@ -211,11 +236,16 @@ describe("MaisonEnergyOrderBook", function () {
       getOrderMetadata(1) // SELL
     );
 
+    await time.increase(10);
+
+    const currentBlock = await ethers.provider.getBlock("latest");
+    const expectedTimestamp = currentBlock.timestamp + 1; // 1 second later
+
     const [needed, data] = await orderBook.checkUpkeep("0x");
     expect(needed).to.equal(true);
 
     await expect(orderBook.performUpkeep(data))
       .to.emit(orderBook, "NoLiquiditySellOrderCreated")
-      .withArgs(await seller.getAddress(), tokenAmount, await ethers.provider.getBlock("latest").then(b => b.timestamp));
+      .withArgs(await seller.getAddress(), tokenAmount, expectedTimestamp);
   });
 });
