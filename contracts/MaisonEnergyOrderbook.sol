@@ -13,6 +13,12 @@ import "./interface/IMaisonEnergyOrderBook.sol";
 import "./MaisonEnergyToken.sol";
 import "./library/CommonTypes.sol";
 
+/**
+ * @title MaisonEnergyOrderBook
+ * @dev A decentralized order book for trading energy tokens with USDC
+ * This contract implements an order book system for trading energy tokens with USDC,
+ * supporting both market and limit orders with time-weighted matching.
+ */
 contract MaisonEnergyOrderBook is
     Initializable,
     ERC1155HolderUpgradeable,
@@ -42,6 +48,13 @@ contract MaisonEnergyOrderBook is
     IERC20 public usdc;
     MaisonEnergyToken public maisonEnergyToken;
 
+    /**
+     * @dev Initializes the contract with necessary addresses and parameters
+     * @param _treasury Address where fees will be sent
+     * @param _insuranceAddress Address for handling insurance cases
+     * @param _usdcAddress Address of the USDC token contract
+     * @param _maisonEnergyTokenAddress Address of the energy token contract
+     */
     function initialize(
         address _treasury,
         address _insuranceAddress,
@@ -69,9 +82,11 @@ contract MaisonEnergyOrderBook is
     }
 
     /**
-     * @dev Create new buy market order which will be executed instantly
+     * @dev Creates a new buy market order that executes instantly
+     * @param usdcAmount Amount of USDC to spend
+     * @param tokenId ID of the energy token to buy
+     * @param orderMetadata Metadata containing order type, zone, and delivery type
      */
-
     function createBuyMarketOrder(
         uint256 usdcAmount,
         uint256 tokenId,
@@ -202,6 +217,17 @@ contract MaisonEnergyOrderBook is
         nonce++;
     }
 
+    /**
+     * @dev Distributes a buy order across multiple sell orders at the same price level
+     * @param buyOrder The buy order to distribute
+     * @param currentPrice Current price level being processed
+     * @param start Starting index in the sell orders array
+     * @param end Ending index in the sell orders array
+     * @param totalWeight Total time weight for this price level
+     * @param nowTime Current block timestamp
+     * @return tokenFilled Amount of tokens filled
+     * @return usdcUsed Amount of USDC used
+     */
     function distributeBuyOrderAcrossPriceLevel(
         Order memory buyOrder,
         uint256 currentPrice,
@@ -259,9 +285,11 @@ contract MaisonEnergyOrderBook is
     }
 
     /**
-     * @dev Create new sell market order which will be executed instantly
+     * @dev Creates a new sell market order that executes instantly
+     * @param tokenAmount Amount of tokens to sell
+     * @param tokenId ID of the energy token to sell
+     * @param orderMetadata Metadata containing order type, zone, and delivery type
      */
-
     function createSellMarketOrder(
         uint256 tokenAmount,
         uint256 tokenId,
@@ -408,6 +436,17 @@ contract MaisonEnergyOrderBook is
         nonce++;
     }
 
+    /**
+     * @dev Distributes a sell order across multiple buy orders at the same price level
+     * @param sellOrder The sell order to distribute
+     * @param currentPrice Current price level being processed
+     * @param start Starting index in the buy orders array
+     * @param end Ending index in the buy orders array
+     * @param totalWeight Total time weight for this price level
+     * @param nowTime Current block timestamp
+     * @return usdcFilled Amount of USDC filled
+     * @return tokenAmountUsed Amount of tokens used
+     */
     function distributeSellOrderAcrossPriceLevel(
         Order memory sellOrder,
         uint256 currentPrice,
@@ -479,7 +518,12 @@ contract MaisonEnergyOrderBook is
     }
 
     /**
-     * @dev Create new limit order
+     * @dev Creates a new limit order that may execute immediately or be placed in the order book
+     * @param desiredPrice Price per token in USDC
+     * @param tokenAmount Amount of tokens to trade
+     * @param validTo Timestamp when the order expires
+     * @param tokenId ID of the energy token
+     * @param orderMetadata Metadata containing order type, zone, and delivery type
      */
     function createLimitOrder(
         uint256 desiredPrice,
@@ -723,6 +767,10 @@ contract MaisonEnergyOrderBook is
         nonce++;
     }
 
+    /**
+     * @dev Cleans up invalid orders from the active order list
+     * @param orderMetadata Metadata to identify which orders to clean
+     */
     function cleanLimitOrders(OrderMetadata memory orderMetadata) internal {
         uint256[] storage orderIds = activeOrderIds[orderMetadata.orderType][
             orderMetadata.zone
@@ -745,6 +793,10 @@ contract MaisonEnergyOrderBook is
         }
     }
 
+    /**
+     * @dev Inserts a limit order into the correct position in the order book
+     * @param orderId ID of the order to insert
+     */
     function insertLimitOrder(uint256 orderId) internal {
         Order storage order = ordersById[orderId]; // Fetch order from storage
 
@@ -786,15 +838,25 @@ contract MaisonEnergyOrderBook is
         }
     }
 
+    /**
+     * @dev Checks if an order is invalid (canceled, filled, or empty)
+     * @param orderId ID of the order to check
+     * @return bool True if the order is invalid
+     */
     function isInvalidOrder(uint256 orderId) internal view returns (bool) {
         Order memory order = ordersById[orderId]; // Fetch order from storage
         return
             order.isCanceled || order.isFilled || order.remainTokenAmount == 0;
     }
 
-    // Chainlink Automation checks this regularly
+    /**
+     * @dev Chainlink Automation function to check if any orders need to be processed
+     * @param checkData Additional data for the check (unused)
+     * @return upkeepNeeded Whether upkeep is needed
+     * @return performData Data to be used in performUpkeep if needed
+     */
     function checkUpkeep(
-        bytes calldata
+        bytes calldata checkData
     )
         external
         view
@@ -811,7 +873,10 @@ contract MaisonEnergyOrderBook is
         }
     }
 
-    // Chainlink Automation executes this when checkUpkeep returns true
+    /**
+     * @dev Chainlink Automation function to process expired orders
+     * @param performData Data containing the order ID to process
+     */
     function performUpkeep(bytes calldata performData) external override {
         uint256 orderId = abi.decode(performData, (uint256));
 
@@ -825,6 +890,10 @@ contract MaisonEnergyOrderBook is
         );
     }
 
+    /**
+     * @dev Modifier to ensure only the order maker can perform certain actions
+     * @param orderId ID of the order to check
+     */
     modifier onlyOrderMaker(uint256 orderId) {
         require(orderId < nonce, "Invalid order id");
         Order memory order = ordersById[orderId];
@@ -835,6 +904,10 @@ contract MaisonEnergyOrderBook is
         _;
     }
 
+    /**
+     * @dev Cancels an existing order
+     * @param orderId ID of the order to cancel
+     */
     function cancelOrder(uint256 orderId) external onlyOrderMaker(orderId) {
         Order storage order = ordersById[orderId];
 
@@ -858,6 +931,11 @@ contract MaisonEnergyOrderBook is
         emit OrderCanceled(order.id, block.timestamp);
     }
 
+    /**
+     * @dev Sets the fee rates for buy and sell orders
+     * @param _buyFeeBips Fee rate for buy orders in basis points
+     * @param _sellFeeBips Fee rate for sell orders in basis points
+     */
     function setFeeBips(
         uint256 _buyFeeBips,
         uint256 _sellFeeBips
@@ -870,6 +948,10 @@ contract MaisonEnergyOrderBook is
         emit FeeUpdated(buyFeeBips, sellFeeBips);
     }
 
+    /**
+     * @dev Updates the treasury address
+     * @param _treasury New treasury address
+     */
     function setTreasury(address _treasury) external onlyOwner {
         require(_treasury != address(0), "Invalid address");
         treasury = _treasury;
@@ -877,6 +959,13 @@ contract MaisonEnergyOrderBook is
         emit TreasuryUpdated(treasury);
     }
 
+    /**
+     * @dev Calculates the real amount and fee amount after deducting fees
+     * @param amount Original amount
+     * @param orderType Type of order (BUY or SELL)
+     * @return realAmount Amount after fee deduction
+     * @return feeAmount Fee amount
+     */
     function getAmountDeductFee(
         uint256 amount,
         OrderType orderType
@@ -887,6 +976,11 @@ contract MaisonEnergyOrderBook is
         feeAmount = amount - realAmount;
     }
 
+    /**
+     * @dev Gets all active orders of a specific type
+     * @param orderType Type of orders to retrieve (BUY or SELL)
+     * @return Order[] Array of active orders
+     */
     function getActiveOrdersByType(
         OrderType orderType
     ) public view returns (Order[] memory) {
@@ -926,6 +1020,11 @@ contract MaisonEnergyOrderBook is
         return activeOrders;
     }
 
+    /**
+     * @dev Gets active orders matching specific metadata
+     * @param orderMetadata Metadata to filter orders
+     * @return Order[] Array of matching active orders
+     */
     function getActiveOrders(
         OrderMetadata memory orderMetadata
     ) public view returns (Order[] memory) {
