@@ -4,23 +4,25 @@ import { insuranceAddress, usdcAddress } from "./address";
 async function main() {
     console.log("Deploying Token contract...");
 
+    const priceOracleAddress = "0x";
+
     // Verify that required addresses are set
     if (!insuranceAddress || !usdcAddress) {
         throw new Error("Required addresses not set in address.ts");
     }
 
     const MaisonEnergyToken = await ethers.getContractFactory("MaisonEnergyToken");
-    
+
     // Deploy the proxy contract
     const maisonEnergyToken = await upgrades.deployProxy(MaisonEnergyToken, [
-        "MaisonEnergyToken", // Token name
+        priceOracleAddress,
         insuranceAddress,
         usdcAddress
     ], {
         initializer: "initialize",
         kind: "uups" // Specify UUPS proxy pattern
     });
-    
+
     await maisonEnergyToken.waitForDeployment();
     const tokenAddress = await maisonEnergyToken.getAddress();
 

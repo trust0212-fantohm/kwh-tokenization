@@ -58,6 +58,14 @@ interface IMaisonEnergyOrderBook {
     );
     event TreasuryUpdated(address indexed newTreasury);
     event FeeUpdated(uint256 buyFeeBips, uint256 sellFeeBips);
+    event PromiseToPayFulfilled(
+        uint256 indexed commitmentId,
+        address indexed tokenHolder,
+        uint256 indexed tokenId,
+        uint256 tokenAmount,
+        uint256 usdcAmount,
+        uint256 timestamp
+    );
 
     function createBuyMarketOrder(
         uint256 usdcValue,

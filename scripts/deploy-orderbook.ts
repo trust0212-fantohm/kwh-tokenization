@@ -1,27 +1,27 @@
 import { ethers, upgrades } from "hardhat";
-import { insuranceAddress, treasury, usdcAddress } from "./address";
+import { treasury, usdcAddress } from "./address";
 
 async function main() {
     console.log("Deploying Orderbook contract...");
+    const maisonEnergyTokenAddress = "0x"; // Replace with the actual address of the MaisonEnergyToken contract
 
     // Verify that required addresses are set
-    if (!treasury || !insuranceAddress || !usdcAddress) {
+    if (!treasury || !usdcAddress || !maisonEnergyTokenAddress) {
         throw new Error("Required addresses not set in address.ts");
     }
 
     const MaisonEnergyOrderBook = await ethers.getContractFactory("MaisonEnergyOrderBook");
-    
+
     // Deploy the proxy contract
     const maisonEnergyOrderBook = await upgrades.deployProxy(MaisonEnergyOrderBook, [
         treasury,
-        insuranceAddress,
         usdcAddress,
-        "MaisonEnergyOrderbook" // Contract name
+        maisonEnergyTokenAddress
     ], {
         initializer: "initialize",
         kind: "uups" // Specify UUPS proxy pattern
     });
-    
+
     await maisonEnergyOrderBook.waitForDeployment();
     const orderbookAddress = await maisonEnergyOrderBook.getAddress();
 
