@@ -38,12 +38,23 @@ contract MaisonEnergyOrderBook is
     uint256[] public fulfilledOrderIds;
 
     address public treasury;
-    address public insuranceAddress;
 
     mapping(OrderType => mapping(CommonTypes.ZoneType => mapping(CommonTypes.PhysicalDeliveryType => uint256[])))
         public activeOrderIds;
     mapping(uint256 => Order) public ordersById;
     mapping(address => uint256[]) public ordersByUser; // Tracks order IDs by user
+
+    // Promise-to-pay commitments
+    struct PromiseToPay {
+        address tokenHolder;
+        uint256 tokenId;
+        uint256 tokenAmount;
+        uint256 usdcAmount;
+        uint256 promiseTimestamp;
+        bool isFulfilled;
+    }
+    mapping(uint256 => PromiseToPay) public promiseToPayCommitments;
+    uint256 public promiseNonce;
 
     IERC20 public usdc;
     MaisonEnergyToken public maisonEnergyToken;
@@ -51,13 +62,11 @@ contract MaisonEnergyOrderBook is
     /**
      * @dev Initializes the contract with necessary addresses and parameters
      * @param _treasury Address where fees will be sent
-     * @param _insuranceAddress Address for handling insurance cases
      * @param _usdcAddress Address of the USDC token contract
      * @param _maisonEnergyTokenAddress Address of the energy token contract
      */
     function initialize(
         address _treasury,
-        address _insuranceAddress,
         address _usdcAddress,
         address _maisonEnergyTokenAddress
     ) public initializer {
@@ -72,7 +81,6 @@ contract MaisonEnergyOrderBook is
         require(_treasury != address(0), "Invalid treasury address");
 
         treasury = _treasury;
-        insuranceAddress = _insuranceAddress;
         usdc = IERC20(_usdcAddress);
         maisonEnergyToken = MaisonEnergyToken(_maisonEnergyTokenAddress);
 
@@ -338,20 +346,39 @@ contract MaisonEnergyOrderBook is
 
         Order[] memory activeBuyOrders = getActiveOrders(buyMetadata);
 
-        // If there are no active buy orders, send tokens to insurance address
+        // If there are no active buy orders, create a promise-to-pay commitment
         if (activeBuyOrders.length == 0) {
+            // Calculate the issuer address based on tokenId and other parameters
+            address tokenIssuer = getTokenIssuerAddress(tokenId);
+
+            // Create promise-to-pay commitment
+            PromiseToPay memory commitment = PromiseToPay({
+                tokenHolder: msg.sender,
+                tokenId: tokenId,
+                tokenAmount: tokenAmount,
+                usdcAmount: 0, // Will be set when promise is fulfilled
+                promiseTimestamp: block.timestamp,
+                isFulfilled: false
+            });
+
+            promiseToPayCommitments[promiseNonce] = commitment;
+
+            // Transfer tokens to the calculated issuer
             maisonEnergyToken.safeTransferFrom(
-                sellMarketOrder.trader,
-                insuranceAddress,
+                address(this),
+                tokenIssuer,
                 tokenId,
                 tokenAmount,
                 ""
             );
+
             emit NoLiquiditySellOrderCreated(
-                sellMarketOrder.trader,
+                msg.sender,
                 tokenAmount,
                 block.timestamp
             );
+
+            promiseNonce++;
             return;
         }
 
@@ -406,18 +433,36 @@ contract MaisonEnergyOrderBook is
         }
 
         if (sellMarketOrder.remainTokenAmount > 0) {
+            // Calculate the issuer address based on tokenId and other parameters
+            address tokenIssuer = getTokenIssuerAddress(tokenId);
+
+            // Create promise-to-pay commitment for remaining tokens
+            PromiseToPay memory commitment = PromiseToPay({
+                tokenHolder: sellMarketOrder.trader,
+                tokenId: tokenId,
+                tokenAmount: sellMarketOrder.remainTokenAmount,
+                usdcAmount: 0, // Will be set when promise is fulfilled
+                promiseTimestamp: block.timestamp,
+                isFulfilled: false
+            });
+
+            promiseToPayCommitments[promiseNonce] = commitment;
+
             maisonEnergyToken.safeTransferFrom(
                 address(this),
-                insuranceAddress,
+                tokenIssuer,
                 tokenId,
                 sellMarketOrder.remainTokenAmount,
                 ""
             );
+
             emit NoLiquiditySellOrderCreated(
-                msg.sender,
+                sellMarketOrder.trader,
                 sellMarketOrder.remainTokenAmount,
                 block.timestamp
             );
+
+            promiseNonce++;
         }
 
         fulfilledOrderIds.push(sellMarketOrder.id);
@@ -540,7 +585,7 @@ contract MaisonEnergyOrderBook is
             usdc.safeTransferFrom(
                 msg.sender,
                 address(this),
-                desiredPrice * tokenAmount / 10 ** TOEKN_DECIMALS
+                (desiredPrice * tokenAmount) / 10 ** TOEKN_DECIMALS
             );
         } else {
             maisonEnergyToken.safeTransferFrom(
@@ -1039,5 +1084,57 @@ contract MaisonEnergyOrderBook is
         }
 
         return orders;
+    }
+
+    /**
+     * @dev Calculates the issuer address based on token ID
+     * @param tokenId The token ID
+     * @return The issuer address from the token details
+     */
+    function getTokenIssuerAddress(
+        uint256 tokenId
+    ) internal view returns (address) {
+        address tokenIssuer = maisonEnergyToken.tokenIssuers(tokenId);
+        return tokenIssuer;
+    }
+
+    /**
+     * @dev Fulfills a promise-to-pay commitment by transferring USDC to the token holder
+     * @param commitmentId ID of the promise-to-pay commitment
+     * @param usdcAmount Amount of USDC to transfer
+     */
+    function fulfillPromiseToPay(
+        uint256 commitmentId,
+        uint256 usdcAmount
+    ) external nonReentrant {
+        PromiseToPay storage commitment = promiseToPayCommitments[commitmentId];
+        require(commitment.tokenHolder != address(0), "Invalid commitment ID");
+        require(!commitment.isFulfilled, "Commitment already fulfilled");
+        require(
+            block.timestamp >= commitment.promiseTimestamp + 24 hours,
+            "24 hours not elapsed"
+        );
+
+        address tokenIssuer = getTokenIssuerAddress(commitment.tokenId);
+        require(
+            msg.sender == tokenIssuer,
+            "Only issuer can fulfill commitment"
+        );
+
+        // Transfer USDC to token holder
+        usdc.safeTransferFrom(msg.sender, commitment.tokenHolder, usdcAmount);
+
+        // Update commitment
+        commitment.usdcAmount = usdcAmount;
+        commitment.isFulfilled = true;
+
+        emit PromiseToPayFulfilled(
+            commitmentId,
+            commitment.tokenHolder,
+            commitment.tokenId,
+            commitment.tokenAmount,
+            usdcAmount,
+            block.timestamp
+        );
     }
 }
