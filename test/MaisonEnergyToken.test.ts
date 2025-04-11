@@ -78,7 +78,7 @@ describe("MaisonEnergyToken", function () {
         await maisonEnergyToken.grantRole(BACKEND_ROLE, backend.address);
 
         // Mint some USDC to issuer and users
-        await mockUSDC.mint(issuer.address, ethers.parseUnits("1000000", 6));
+        await mockUSDC.mint(issuer.address, ethers.parseUnits("10000000", 6));
         await mockUSDC.mint(user1.address, ethers.parseUnits("1000000", 6));
         await mockUSDC.mint(user2.address, ethers.parseUnits("1000000", 6));
 

@@ -14,6 +14,7 @@ describe("MaisonEnergyOrderBook", function () {
   let owner: SignerWithAddress;
   let buyer: SignerWithAddress;
   let seller: SignerWithAddress;
+  let sellerForNoLiquidity: SignerWithAddress;
   let treasury: SignerWithAddress;
   let insurance: SignerWithAddress;
   let ercotPriceOracle: ERCOTPriceOracle;
@@ -53,7 +54,7 @@ describe("MaisonEnergyOrderBook", function () {
   };
 
   beforeEach(async () => {
-    [owner, buyer, seller, treasury, insurance] = await ethers.getSigners();
+    [owner, buyer, seller, treasury, insurance, sellerForNoLiquidity] = await ethers.getSigners();
 
     // Deploy MockUSDC
     const USDC = await ethers.getContractFactory("MockUSDC");
@@ -160,20 +161,41 @@ describe("MaisonEnergyOrderBook", function () {
     expect(after > before).to.be.true;
   });
 
-  it("should forward unmatched sell market orders to insurance", async () => {
-    const tokenAmount = ethers.parseUnits("50", TOKEN_DECIMALS);
-    await token.connect(seller).setApprovalForAll(orderBook.getAddress(), true);
+  it("should forward unmatched sell market orders to token issuer and create promise-to-pay", async () => {
+    const tokenAmount = ethers.parseUnits("1000", TOKEN_DECIMALS);
 
-    const before = await token.balanceOf(await insurance.getAddress(), tokenId);
+    // Approve orderbook to spend tokens
+    await token.connect(seller).setApprovalForAll(sellerForNoLiquidity.address, true);
+    // Transfer tokens from seller to sellerForNoLiquidity first
+    await token.connect(seller).safeTransferFrom(seller.address, sellerForNoLiquidity.address, 0, tokenAmount, "0x");
 
-    await orderBook.connect(seller).createSellMarketOrder(
+    // Approve orderbook to spend tokens
+    await token.connect(sellerForNoLiquidity).setApprovalForAll(orderBook.getAddress(), true);
+
+    const tokenIssuer = await token.tokenIssuers(0);
+
+    // Create sell market order
+    await expect(orderBook.connect(sellerForNoLiquidity).createSellMarketOrder(
       tokenAmount,
-      tokenId,
+      0,
       getOrderMetadata(1) // SELL
-    );
+    )).to.emit(orderBook, "NoLiquiditySellOrderCreated")
+      .withArgs(sellerForNoLiquidity.address, tokenAmount, await time.latest() + 1);
 
-    const after = await token.balanceOf(await insurance.getAddress(), tokenId);
-    expect(after - before).to.equal(tokenAmount);
+    // Verify seller's tokens were transferred
+    const sellerBalanceAfter = await token.balanceOf(sellerForNoLiquidity.address, 0);
+    expect(sellerBalanceAfter).to.equal(0);
+
+    // Verify token issuer received the tokens
+    const issuerBalance = await token.balanceOf(tokenIssuer, 0);
+    expect(issuerBalance).to.equal(tokenAmount);
+
+    // Verify promise-to-pay commitment
+    const commitment = await orderBook.promiseToPayCommitments(0);
+    expect(commitment.tokenHolder).to.equal(sellerForNoLiquidity.address);
+    expect(commitment.tokenId).to.equal(0);
+    expect(commitment.tokenAmount).to.equal(tokenAmount);
+    expect(commitment.isFulfilled).to.equal(false);
   });
 
   it("should cancel a limit order and refund USDC", async () => {
@@ -239,6 +261,9 @@ describe("MaisonEnergyOrderBook", function () {
     await time.increase(10);
 
     const currentBlock = await ethers.provider.getBlock("latest");
+    if (!currentBlock) {
+      throw new Error("Failed to get latest block");
+    }
     const expectedTimestamp = currentBlock.timestamp + 1; // 1 second later
 
     const [needed, data] = await orderBook.checkUpkeep("0x");

@@ -206,7 +206,8 @@ contract MaisonEnergyToken is
             energyAttributes.physicalDelivery
         );
 
-        uint256 usdcValue = (amount * realtimePrice) / 10 ** 18;
+        // Calculate USDC value (convert from 18 decimals to 6 decimals)
+        uint256 usdcValue = (amount * realtimePrice) / 10 ** 30;
 
         if (tokenIdsForIssuer[msg.sender].length == 0) {
             issuerMetrics[msg.sender].collateralBips = 100;
