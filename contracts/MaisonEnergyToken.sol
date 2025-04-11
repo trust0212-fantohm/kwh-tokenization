@@ -702,27 +702,58 @@ contract MaisonEnergyToken is
         // Base score starts at 1000
         uint256 score = 1000;
 
-        // Deduct points for defaults and pending payments
-        if (metrics.pendingPromiseToPayDefault > 0) {
-            score -= 200;
-        }
-        if (metrics.pendingPromiseToPay > 0) {
+        // Calculate default and payment ratios
+        uint256 defaultRatio = metrics.totalKwhMinted > 0 
+            ? (metrics.pendingPromiseToPayDefault * 10000) / metrics.totalKwhMinted 
+            : 0;
+        uint256 pendingPaymentRatio = metrics.totalKwhMinted > 0
+            ? (metrics.pendingPromiseToPay * 10000) / metrics.totalKwhMinted
+            : 0;
+        uint256 honoredDefaultRatio = metrics.totalKwhMinted > 0
+            ? (metrics.pendingPromiseToPayDefaultHonored * 10000) / metrics.totalKwhMinted
+            : 0;
+
+        // Deduct points for defaults and pending payments based on ratios
+        if (defaultRatio > 1000) { // >10% default ratio
+            score -= 500;
+        } else if (defaultRatio > 500) { // >5% default ratio
+            score -= 300;
+        } else if (defaultRatio > 100) { // >1% default ratio
             score -= 100;
         }
 
-        // Add points for honored defaults
-        if (metrics.pendingPromiseToPayDefaultHonored > 0) {
+        if (pendingPaymentRatio > 1000) { // >10% pending payment ratio
+            score -= 300;
+        } else if (pendingPaymentRatio > 500) { // >5% pending payment ratio
+            score -= 150;
+        } else if (pendingPaymentRatio > 100) { // >1% pending payment ratio
+            score -= 50;
+        }
+
+        // Add points for honored defaults based on ratio
+        if (honoredDefaultRatio > 1000) { // >10% honored default ratio
+            score += 200;
+        } else if (honoredDefaultRatio > 500) { // >5% honored default ratio
+            score += 100;
+        } else if (honoredDefaultRatio > 100) { // >1% honored default ratio
             score += 50;
         }
 
-        // Adjust score based on volume
-        if (metrics.totalVolumeSoldKwh > 1000000) {
-            // 1M kWh
-            score += 100;
-        } else if (metrics.totalVolumeSoldKwh > 100000) {
-            // 100k kWh
-            score += 50;
+        // Adjust score based on volume percentage of total minted
+        if (metrics.totalVolumeSoldKwh > 0) {
+            uint256 volumeRatio = (metrics.totalVolumeSoldKwh * 10000) / metrics.totalKwhMinted;
+            if (volumeRatio > 8000) { // >80% volume ratio
+                score += 200;
+            } else if (volumeRatio > 5000) { // >50% volume ratio
+                score += 100;
+            } else if (volumeRatio > 2000) { // >20% volume ratio
+                score += 50;
+            }
         }
+
+        // Ensure score stays within reasonable bounds
+        if (score > 1500) score = 1500;
+        if (score < 0) score = 0;
 
         return score;
     }
