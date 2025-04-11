@@ -82,7 +82,7 @@ describe("MaisonEnergyOrderBook", function () {
     const OrderBook = await ethers.getContractFactory("MaisonEnergyOrderBook");
     orderBook = await upgrades.deployProxy(
       OrderBook,
-      [treasury.address, insurance.address, await usdc.getAddress(), await token.getAddress()],
+      [treasury.address, await usdc.getAddress(), await token.getAddress()],
       {
         initializer: "initialize",
       }

@@ -1,6 +1,37 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
+/**
+ * @title MaisonEnergyToken
+ * @notice A sophisticated ERC1155 token contract for managing energy tokens in the ERCOT market
+ * 
+ * This contract implements a comprehensive system for:
+ * - Minting and managing energy tokens with specific attributes (zone, delivery type, fuel type)
+ * - Tracking token expiration and settlement
+ * - Managing issuer collateral and defaults
+ * - Handling physical delivery settlements
+ * - Providing detailed metrics for both issuers and token holders
+ * 
+ * Key Features:
+ * - Role-based access control (ISSUER_ROLE, BACKEND_ROLE)
+ * - Automated token expiration through Chainlink Automation
+ * - Collateral management with USDC
+ * - Default handling and settlement mechanisms
+ * - Comprehensive metrics tracking for issuers and representatives
+ * - Support for different energy attributes (zone, delivery type, fuel type)
+ * 
+ * The contract maintains detailed records of:
+ * - Token issuance and redemption
+ * - Issuer performance and defaults
+ * - Token expiration and settlement
+ * - Physical delivery settlements
+ * - Various metrics for monitoring and analysis
+ * 
+ * @dev This contract uses OpenZeppelin's ERC1155, AccessControl, and ReentrancyGuard
+ * @dev Implements Chainlink Automation for automated token expiration
+ * @dev Uses USDC for collateral and settlement
+ */
+
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts-upgradeable/token/ERC1155/ERC1155Upgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";

@@ -363,7 +363,7 @@ contract MaisonEnergyOrderBook is
 
             promiseToPayCommitments[promiseNonce] = commitment;
 
-            // Transfer tokens to the calculated issuer
+            // Transfer tokens to the token issuer
             maisonEnergyToken.safeTransferFrom(
                 address(this),
                 tokenIssuer,
