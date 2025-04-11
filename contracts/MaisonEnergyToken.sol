@@ -724,17 +724,6 @@ contract MaisonEnergyToken is
             score += 50;
         }
 
-        // Deduct points for high ratio of expired tokens
-        if (metrics.totalExpiredTokens > 0) {
-            uint256 expiredRatio = (metrics.totalExpiredTokens * 100) /
-                metrics.totalKwhMinted;
-            if (expiredRatio > 50) {
-                score -= 200;
-            } else if (expiredRatio > 20) {
-                score -= 100;
-            }
-        }
-
         return score;
     }
 }
