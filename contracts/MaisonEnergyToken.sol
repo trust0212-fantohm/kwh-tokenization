@@ -101,7 +101,6 @@ contract MaisonEnergyToken is
         CommonTypes.FuelType fuelType;
     }
 
-    mapping(uint256 => address) public tokenIssuers;
     mapping(uint256 => TokenDetail) public tokenDetails;
     mapping(address => uint256) public redeemedTokensForUser;
     mapping(address => IssuerData) public issuerMetrics;
@@ -219,7 +218,6 @@ contract MaisonEnergyToken is
         usdc.safeTransferFrom(msg.sender, insuranceAddress, collateralAmount);
 
         uint256 id = NumKindsOfToken;
-        tokenIssuers[id] =  msg.sender;
         tokenDetails[id] = TokenDetail(
             msg.sender,
             embeddedValue,

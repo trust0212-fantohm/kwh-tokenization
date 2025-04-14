@@ -12,6 +12,7 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "./interface/IMaisonEnergyOrderBook.sol";
 import "./MaisonEnergyToken.sol";
 import "./library/CommonTypes.sol";
+import "./ERCOTPriceOracle.sol";
 
 /**
  * @title MaisonEnergyOrderBook
@@ -38,6 +39,7 @@ contract MaisonEnergyOrderBook is
     uint256[] public fulfilledOrderIds;
 
     address public treasury;
+    ERCOTPriceOracle public ercotPriceOracle;
 
     mapping(OrderType => mapping(CommonTypes.ZoneType => mapping(CommonTypes.PhysicalDeliveryType => uint256[])))
         public activeOrderIds;
@@ -64,11 +66,13 @@ contract MaisonEnergyOrderBook is
      * @param _treasury Address where fees will be sent
      * @param _usdcAddress Address of the USDC token contract
      * @param _maisonEnergyTokenAddress Address of the energy token contract
+     * @param _ercotPriceOracleAddress Address of the ERCOT price oracle contract
      */
     function initialize(
         address _treasury,
         address _usdcAddress,
-        address _maisonEnergyTokenAddress
+        address _maisonEnergyTokenAddress,
+        address _ercotPriceOracleAddress
     ) public initializer {
         __Ownable_init(msg.sender);
         __ReentrancyGuard_init();
@@ -79,10 +83,15 @@ contract MaisonEnergyOrderBook is
             "Invalid token address"
         );
         require(_treasury != address(0), "Invalid treasury address");
+        require(
+            _ercotPriceOracleAddress != address(0),
+            "Invalid oracle address"
+        );
 
         treasury = _treasury;
         usdc = IERC20(_usdcAddress);
         maisonEnergyToken = MaisonEnergyToken(_maisonEnergyTokenAddress);
+        ercotPriceOracle = ERCOTPriceOracle(_ercotPriceOracleAddress);
 
         buyFeeBips = 500;
         sellFeeBips = 500;
@@ -100,6 +109,10 @@ contract MaisonEnergyOrderBook is
         uint256 tokenId,
         OrderMetadata memory orderMetadata
     ) external nonReentrant {
+        (, , , , , , , , , bool isExpired, ) = maisonEnergyToken.tokenDetails(
+            tokenId
+        );
+        require(!isExpired, "Token expired");
         require(
             orderMetadata.orderType == OrderType.BUY,
             "Should be Buy Order"
@@ -303,6 +316,10 @@ contract MaisonEnergyOrderBook is
         uint256 tokenId,
         OrderMetadata memory orderMetadata
     ) external nonReentrant {
+        (, , , , , , , , , bool isExpired, ) = maisonEnergyToken.tokenDetails(
+            tokenId
+        );
+        require(!isExpired, "Token expired");
         require(
             orderMetadata.orderType == OrderType.SELL,
             "Should be Sell Order"
@@ -339,7 +356,7 @@ contract MaisonEnergyOrderBook is
         ordersByUser[msg.sender].push(nonce);
 
         OrderMetadata memory buyMetadata = OrderMetadata({
-            orderType: OrderType.SELL,
+            orderType: OrderType.BUY,
             zone: orderMetadata.zone,
             physicalDelivery: orderMetadata.physicalDelivery
         });
@@ -385,16 +402,33 @@ contract MaisonEnergyOrderBook is
         uint256 totalUsdc = 0;
         uint256 nowTime = block.timestamp;
 
+        // Get real-time price from ERCOT oracle
+        (uint256 realTimePrice, ) = ercotPriceOracle.getRealTimePrice(
+            orderMetadata.zone,
+            orderMetadata.physicalDelivery
+        );
+
         for (
             uint256 i = activeBuyOrders.length;
             i > 0 && sellMarketOrder.remainTokenAmount > 0;
 
         ) {
-            uint256 currentPrice = activeBuyOrders[i - 1].desiredPrice;
-            uint256 j = i;
+            Order memory buyOrder = activeBuyOrders[i - 1];
+            if (isInvalidOrder(buyOrder.id)) {
+                i--;
+                continue;
+            }
 
+            // Use real-time price for market orders
+            uint256 currentPrice = realTimePrice;
+            if (currentPrice == 0) {
+                // If no real-time price available, use the buy order's desired price
+                currentPrice = buyOrder.desiredPrice;
+            }
+
+            uint256 j = i;
             while (
-                j > 0 && activeBuyOrders[j - 1].desiredPrice == currentPrice
+                j > 0 && activeBuyOrders[j - 1].desiredPrice >= currentPrice
             ) {
                 j--;
             }
@@ -577,6 +611,10 @@ contract MaisonEnergyOrderBook is
         uint256 tokenId,
         OrderMetadata memory orderMetadata
     ) external {
+        (, , , , , , , , , bool isExpired, ) = maisonEnergyToken.tokenDetails(
+            tokenId
+        );
+        require(!isExpired, "Token expired");
         require(validTo > block.timestamp, "Invalid time limit");
 
         uint256 usdcAmount;
@@ -1094,7 +1132,8 @@ contract MaisonEnergyOrderBook is
     function getTokenIssuerAddress(
         uint256 tokenId
     ) internal view returns (address) {
-        address tokenIssuer = maisonEnergyToken.tokenIssuers(tokenId);
+        (address tokenIssuer, , , , , , , , , , ) = maisonEnergyToken
+            .tokenDetails(tokenId);
         return tokenIssuer;
     }
 

@@ -83,7 +83,7 @@ describe("MaisonEnergyOrderBook", function () {
     const OrderBook = await ethers.getContractFactory("MaisonEnergyOrderBook");
     orderBook = await upgrades.deployProxy(
       OrderBook,
-      [treasury.address, await usdc.getAddress(), await token.getAddress()],
+      [treasury.address, await usdc.getAddress(), await token.getAddress(), await ercotPriceOracle.getAddress()],
       {
         initializer: "initialize",
       }
@@ -171,8 +171,8 @@ describe("MaisonEnergyOrderBook", function () {
 
     // Approve orderbook to spend tokens
     await token.connect(sellerForNoLiquidity).setApprovalForAll(orderBook.getAddress(), true);
-
-    const tokenIssuer = await token.tokenIssuers(0);
+    const [tokenIssuer, , , , , , , , , ,] = await token.tokenDetails(0); // Get the token issuer address
+    console.log("Token issuer address:", tokenIssuer);
 
     // Create sell market order
     await expect(orderBook.connect(sellerForNoLiquidity).createSellMarketOrder(
